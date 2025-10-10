@@ -7,8 +7,12 @@ from data import load_tokenizer
 
 
 def load_model_for_inference(checkpoint_path: str):
-    """Load model from checkpoint for inference"""
+    """Load model from checkpoint for inference (supports both base and RLHF models)"""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+    # Detect model type
+    is_rlhf = 'rlhf_config' in checkpoint
+    model_type = "RLHF-trained" if is_rlhf else "Base"
 
     model_config = checkpoint['model_config']
     model = TransformerLLM(model_config)
@@ -19,6 +23,15 @@ def load_model_for_inference(checkpoint_path: str):
     model.eval()
 
     tokenizer = load_tokenizer(model_config.tokenizer_name)
+
+    # Print model information
+    print(f"✅ Loaded {model_type} model")
+    if is_rlhf:
+        rlhf_config = checkpoint['rlhf_config']
+        print(f"   Policy checkpoint: {rlhf_config.policy_checkpoint}")
+        print(f"   Reward model: {rlhf_config.reward_model_name}")
+    print(f"   Parameters: {model.count_parameters():,}")
+    print(f"   Device: {device}")
 
     return model, tokenizer, device
 
@@ -128,10 +141,10 @@ def generate_text(
 
 
 def interactive_inference(checkpoint_path: str):
-    """Interactive inference mode"""
+    """Interactive inference mode (supports both base and RLHF-trained models)"""
     print("\n🤖 Loading model for inference...")
     model, tokenizer, device = load_model_for_inference(checkpoint_path)
-    print("✅ Model loaded successfully!\n")
+    print()
 
     print("=" * 60)
     print("Interactive Inference Mode")

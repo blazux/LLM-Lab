@@ -7,6 +7,8 @@ from train import train_model
 from inference import interactive_inference
 from bricks import POSITIONAL_ENCODINGS, ATTENTION_TYPES, ACTIVATION_TYPES
 from optimizers import OPTIMIZER_NAMES
+from rlhf_config import RLHFConfig
+from rlhf_train import train_rlhf
 
 
 def print_header():
@@ -20,9 +22,10 @@ def print_menu():
     """Print main menu"""
     print("\nMain Menu:")
     print("  1. Configure new model")
-    print("  2. Train model")
+    print("  2. Base training")
     print("  3. Test model (inference)")
-    print("  4. Exit")
+    print("  4. RLHF training (PPO/DPO)")
+    print("  5. Exit")
 
 
 def get_input(prompt: str, default=None, type_fn=str):
@@ -108,9 +111,9 @@ def configure_model():
 
 
 def configure_training():
-    """Interactive training configuration"""
+    """Interactive base training configuration"""
     print("\n" + "-" * 60)
-    print("Training Configuration")
+    print("Base Training Configuration")
     print("-" * 60)
 
     # Load model config
@@ -201,9 +204,9 @@ def configure_training():
 
 
 def start_training():
-    """Start training with configuration"""
+    """Start base training with configuration"""
     print("\n" + "-" * 60)
-    print("Start Training")
+    print("Start Base Training")
     print("-" * 60)
 
     # Option to use existing config or create new
@@ -268,7 +271,7 @@ def start_training():
 
     # Confirm and start
     print("\n" + "=" * 60)
-    print("Ready to start training!")
+    print("Ready to start base training!")
     print(f"  Model: {model_config.d_model}d, {model_config.n_layers}L, {model_config.n_heads}H")
     if checkpoint_path and additional_steps > 0:
         import torch
@@ -284,18 +287,18 @@ def start_training():
     print(f"  LR: {train_config.lr}")
     print("=" * 60)
 
-    confirm = get_input("\nStart training? [y/n]", default="y")
+    confirm = get_input("\nStart base training? [y/n]", default="y")
     if confirm.lower() not in ['y', 'yes']:
-        print("Training cancelled.")
+        print("Base training cancelled.")
         return
 
-    # Start training
+    # Start base training
     try:
         train_model(model_config, train_config, checkpoint_path, output_dir, additional_steps)
     except KeyboardInterrupt:
-        print("\n\n⚠️  Training interrupted by user")
+        print("\n\n⚠️  Base training interrupted by user")
     except Exception as e:
-        print(f"\n\n❌ Training failed: {e}")
+        print(f"\n\n❌ Base training failed: {e}")
         raise
 
 
@@ -320,6 +323,188 @@ def start_inference():
         raise
 
 
+def configure_rlhf():
+    """Interactive RLHF configuration"""
+    print("\n" + "-" * 60)
+    print("RLHF Configuration")
+    print("-" * 60)
+
+    config = RLHFConfig()
+
+    # Algorithm selection
+    print("\n🧠 Algorithm Selection")
+    print("Options: ppo, dpo")
+    config.algorithm = get_input(
+        "Algorithm",
+        default=config.algorithm
+    ).lower()
+
+    if config.algorithm not in ["ppo", "dpo"]:
+        print(f"❌ Invalid algorithm: {config.algorithm}")
+        print("   Must be 'ppo' or 'dpo'")
+        return None
+
+    # Policy checkpoint
+    print("\n🤖 Policy Model")
+    config.policy_checkpoint = get_input(
+        "Policy checkpoint path",
+        default=config.policy_checkpoint
+    )
+
+    if not os.path.exists(config.policy_checkpoint):
+        print(f"❌ Policy checkpoint not found: {config.policy_checkpoint}")
+        return None
+
+    # Algorithm-specific configuration
+    if config.algorithm == "ppo":
+        # Reward model (only for PPO)
+        print("\n🎁 Reward Model")
+        config.reward_model_name = get_input(
+            "Reward model (HuggingFace)",
+            default=config.reward_model_name
+        )
+    elif config.algorithm == "dpo":
+        # Reference model (only for DPO)
+        print("\n📚 Reference Model")
+        print("Leave empty to use the same checkpoint as policy model")
+        reference_checkpoint = get_input(
+            "Reference checkpoint path (optional)",
+            default=""
+        )
+        if reference_checkpoint and reference_checkpoint.strip():
+            config.reference_checkpoint = reference_checkpoint.strip()
+            if not os.path.exists(config.reference_checkpoint):
+                print(f"⚠️  Reference checkpoint not found: {config.reference_checkpoint}")
+                print("   Will use policy checkpoint as reference")
+                config.reference_checkpoint = None
+
+    # Training parameters
+    print("\n⚙️  Training Hyperparameters")
+    config.batch_size = get_input("Batch size", default=config.batch_size, type_fn=int)
+    config.mini_batch_size = get_input("Mini-batch size", default=config.mini_batch_size, type_fn=int)
+
+    if config.algorithm == "ppo":
+        config.ppo_epochs = get_input("PPO epochs per batch", default=config.ppo_epochs, type_fn=int)
+
+    config.learning_rate = get_input("Learning rate", default=config.learning_rate, type_fn=float)
+
+    if config.algorithm == "ppo":
+        config.clip_range = get_input("Clip range (epsilon)", default=config.clip_range, type_fn=float)
+    elif config.algorithm == "dpo":
+        config.clip_range = get_input("Beta parameter (controls strength)", default=config.clip_range, type_fn=float)
+
+    # GAE parameters (only for PPO)
+    if config.algorithm == "ppo":
+        print("\n📊 GAE Parameters")
+        config.gamma = get_input("Gamma (discount)", default=config.gamma, type_fn=float)
+        config.gae_lambda = get_input("Lambda (GAE)", default=config.gae_lambda, type_fn=float)
+
+    # Training steps
+    print("\n🏃 Training")
+    config.max_steps = get_input("Maximum training steps", default=config.max_steps, type_fn=int)
+
+    # Generation parameters
+    print("\n📝 Generation Parameters")
+    config.max_new_tokens = get_input("Max new tokens", default=config.max_new_tokens, type_fn=int)
+    config.temperature = get_input("Temperature", default=config.temperature, type_fn=float)
+
+    # Dataset configuration
+    print("\n📚 Dataset Configuration")
+    print("Enter datasets (one per line, empty line to finish)")
+    print("Format: dataset_name | subset (optional) | split (optional)")
+    print("\nExamples:")
+    print("  Anthropic/hh-rlhf")
+    print("  tatsu-lab/alpaca")
+
+    datasets = []
+    while True:
+        dataset_input = input(f"\nDataset {len(datasets) + 1} (or press Enter to finish): ").strip()
+        if not dataset_input:
+            break
+
+        parts = [p.strip() for p in dataset_input.split('|')]
+        ds_config = {"name": parts[0]}
+
+        if len(parts) > 1 and parts[1]:
+            ds_config["subset"] = parts[1]
+        if len(parts) > 2 and parts[2]:
+            ds_config["split"] = parts[2]
+
+        datasets.append(ds_config)
+        print(f"  Added: {ds_config['name']}")
+
+    if datasets:
+        config.datasets = datasets
+    else:
+        print("Using default dataset: Anthropic/hh-rlhf")
+
+    # Save config
+    save_path = get_input("\n💾 Save RLHF config to", default="rlhf_config.json")
+    config.save(save_path)
+
+    print(f"\n✅ RLHF configuration saved to: {save_path}")
+    return config
+
+
+def start_rlhf_training():
+    """Start RLHF training"""
+    print("\n" + "-" * 60)
+    print("Start RLHF Training")
+    print("-" * 60)
+
+    # Option to use existing config or create new
+    choice = get_input(
+        "\n1. Use existing RLHF config\n2. Configure new RLHF training\nChoice",
+        default="1"
+    )
+
+    if choice == "2":
+        config = configure_rlhf()
+        if config is None:
+            return
+    else:
+        config_path = get_input("RLHF config path", default="rlhf_config.json")
+        if not os.path.exists(config_path):
+            print(f"❌ RLHF config not found: {config_path}")
+            return
+
+        config = RLHFConfig.load(config_path)
+
+    # Output directory
+    config.output_dir = get_input("\nOutput directory", default=config.output_dir)
+
+    # Confirm and start
+    print("\n" + "=" * 60)
+    print(f"Ready to start RLHF training with {config.algorithm.upper()}!")
+    print(f"  Algorithm: {config.algorithm.upper()}")
+    print(f"  Policy: {config.policy_checkpoint}")
+
+    if config.algorithm == "ppo":
+        print(f"  Reward model: {config.reward_model_name}")
+    elif config.algorithm == "dpo":
+        ref_model = config.reference_checkpoint or config.policy_checkpoint
+        print(f"  Reference model: {ref_model}")
+
+    print(f"  Steps: {config.max_steps}")
+    print(f"  Batch size: {config.batch_size}")
+    print(f"  Learning rate: {config.learning_rate}")
+    print("=" * 60)
+
+    confirm = get_input("\nStart RLHF training? [y/n]", default="y")
+    if confirm.lower() not in ['y', 'yes']:
+        print("RLHF training cancelled.")
+        return
+
+    # Start training
+    try:
+        train_rlhf(config)
+    except KeyboardInterrupt:
+        print("\n\n⚠️  RLHF training interrupted by user")
+    except Exception as e:
+        print(f"\n\n❌ RLHF training failed: {e}")
+        raise
+
+
 def main():
     """Main CLI loop"""
     print_header()
@@ -335,6 +520,8 @@ def main():
         elif choice == "3":
             start_inference()
         elif choice == "4":
+            start_rlhf_training()
+        elif choice == "5":
             print("\n👋 Goodbye!")
             sys.exit(0)
         else:
