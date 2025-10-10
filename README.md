@@ -8,7 +8,7 @@ A minimalistic tool to setup and train LLM.
  - a proper CUDA configuration with `bfloat16` support (mandatory)
  - a basic understanding of what you're doing (optional)
 
-Any mistake will end in CUDE or Torch error, but that's part of the fun.
+Any mistake will end in CUDA or Torch error, but that's part of the fun.
 
 ### Model configuration :
 
@@ -21,7 +21,7 @@ Configure the component you want for your model :
 
 Then configure the size of the model :
  - Embedding (`d_model`) must be divisible by the number of attention heads
- - If you use Grouped Query Attention number number of attention heads must be divisible by KV heads `n_kv_heads` 
+ - If you use Grouped Query Attention : number of attention heads must be divisible by KV heads `n_kv_heads` 
 
 ### Base training :
 
@@ -32,11 +32,11 @@ Configure the training :
  - Learning rate / Batch size / Gradiant Accumulation / Gradiant clipping etc...
  - Datasets : pick any on HuggingFace, if you use more than one they'll be interleaved automatically
 
-Start the training and wait.
+Start the training and wait until it's finished.
 
 ### RLHF Training :
 
-RLHF support both PPO and DPO.
+RLHF support only PPO and DPO.
 
 #### PPO :
 
