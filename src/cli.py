@@ -2,13 +2,14 @@
 import os
 import sys
 
-from config import ModelConfig, TrainingConfig
-from train import train_model
+# Add src directory to Python path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from config import ModelConfig, TrainingConfig, RLHFConfig
+from training import train_model, train_rlhf
 from inference import interactive_inference
-from bricks import POSITIONAL_ENCODINGS, ATTENTION_TYPES, ACTIVATION_TYPES
+from model import POSITIONAL_ENCODINGS, ATTENTION_TYPES, ACTIVATION_TYPES
 from optimizers import OPTIMIZER_NAMES
-from rlhf_config import RLHFConfig
-from rlhf_train import train_rlhf
 
 
 def print_header():

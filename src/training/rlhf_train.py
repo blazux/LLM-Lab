@@ -6,9 +6,9 @@ This module routes RLHF training to the appropriate algorithm:
 - DPO (Direct Preference Optimization) - see dpo_train.py
 """
 
-from rlhf_config import RLHFConfig
-from ppo_train import train_ppo
-from dpo_train import train_dpo
+from config import RLHFConfig
+from .ppo_train import train_ppo
+from .dpo_train import train_dpo
 
 
 def train_rlhf(config: RLHFConfig):

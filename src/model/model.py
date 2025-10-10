@@ -4,7 +4,7 @@ import math
 from torch.utils.checkpoint import checkpoint
 
 from config import ModelConfig
-from bricks import (
+from .bricks import (
     POSITIONAL_ENCODINGS,
     ATTENTION_TYPES,
     NORM_TYPES,

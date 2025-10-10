@@ -10,7 +10,7 @@ from tqdm import tqdm
 from typing import Optional
 
 from model import TransformerLLM
-from rlhf_config import RLHFConfig
+from config import RLHFConfig
 from data import load_tokenizer
 
 
