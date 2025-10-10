@@ -415,7 +415,7 @@ def configure_rlhf():
     print("Format: dataset_name | subset (optional) | split (optional)")
     print("\nExamples:")
     print("  Anthropic/hh-rlhf")
-    print("  tatsu-lab/alpaca")
+    print("  nvidia/HelpSteer3")
 
     datasets = []
     while True:

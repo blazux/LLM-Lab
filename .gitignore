@@ -1,2 +1,8 @@
 __pycache__/
 cache/
+.vscode/
+checkpoints/*
+rlhf_checkpoints/*
+model_config.json
+training_config.json
+rlhf_config.json
