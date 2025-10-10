@@ -1,16 +1,16 @@
-## 🧠 LLM-lab
+# 🧠 LLM-lab
 
 A minimalistic tool to setup and train LLM.
 
 
-### This tool will assume you have :
+## This tool will assume you have :
 
  - a proper CUDA configuration with `bfloat16` support (mandatory)
  - a basic understanding of what you're doing (optional)
 
 Any mistake will end in CUDA or Torch error, but that's part of the fun.
 
-### Model configuration :
+## Model configuration :
 
 Configure the component you want for your model :
  - Tokenizer : pick any on HuggingFace
@@ -20,10 +20,10 @@ Configure the component you want for your model :
  - Feed forward : `ReLU`, `GeLU`, `Leaky ReLU`, `SiLU`, `SwiGLU` 
 
 Then configure the size of the model :
- - Embedding (`d_model`) must be divisible by the number of attention heads
- - If you use Grouped Query Attention : number of attention heads must be divisible by KV heads `n_kv_heads` 
+ - Embedding size (`d_model`) must be divisible by the number of attention heads
+ - If you use Grouped Query Attention : number of attention heads must be divisible by the number of KV heads `n_kv_heads` 
 
-### Base training :
+## Base training :
 
 Configure the training :
  - Training steps : the higher the better
@@ -34,7 +34,7 @@ Configure the training :
 
 Start the training and wait until it's finished.
 
-### RLHF Training :
+## RLHF Training :
 
 RLHF support only PPO and DPO.
 
@@ -54,9 +54,9 @@ RLHF will use Direct Preference Optimization :
 
  - Reference Model : use the base model as much as possible
  - Batch / Mini batch / learning rate / etc ...
- - Beta parameter : contrast temperature
+ - Beta parameter : preference strength
 
-### Model testing :
+## Model testing :
 
 Talk to your trained model and enjoy !
 
