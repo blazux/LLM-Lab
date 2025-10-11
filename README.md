@@ -40,8 +40,6 @@ RLHF support only PPO and DPO.
 
 #### PPO :
 
-RLHF will use Proximal Policy Optimization : 
-
  - Reward model : pick any on HuggingFace
  - Batch / Mini batch / epoch / etc ...
  - Gamma : Discount Factor
@@ -49,8 +47,6 @@ RLHF will use Proximal Policy Optimization :
  - Datasets : pick any on HuggingFace
 
 #### DPO :
-
-RLHF will use Direct Preference Optimization : 
 
  - Reference Model : use the base model as much as possible
  - Batch / Mini batch / learning rate / etc ...
