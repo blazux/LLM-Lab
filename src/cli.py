@@ -237,6 +237,7 @@ def start_training():
     # Check for checkpoint
     checkpoint_path = None
     additional_steps = 0
+    load_optimizer_state = True
     resume = get_input("\nResume from checkpoint? [y/n]", default="n")
     if resume.lower() in ['y', 'yes']:
         checkpoint_path = get_input("Checkpoint path", default="checkpoints/best_model.pt")
@@ -263,6 +264,11 @@ def start_training():
                     extend = get_input("   Train even more steps beyond config? [y/n]", default="n")
                     if extend.lower() in ['y', 'yes']:
                         additional_steps = get_input("   How many additional steps beyond max_steps?", default=0, type_fn=int)
+
+                # Ask about optimizer state loading
+                print(f"\n🔧 Current config optimizer: {train_config.optimizer}")
+                load_opt = get_input("   Load optimizer state from checkpoint? [y/n] (say 'n' if switching optimizers)", default="y")
+                load_optimizer_state = load_opt.lower() in ['y', 'yes']
             except Exception as e:
                 print(f"⚠️  Could not read checkpoint: {e}")
                 checkpoint_path = None
@@ -295,7 +301,7 @@ def start_training():
 
     # Start base training
     try:
-        train_model(model_config, train_config, checkpoint_path, output_dir, additional_steps)
+        train_model(model_config, train_config, checkpoint_path, output_dir, additional_steps, load_optimizer_state)
     except KeyboardInterrupt:
         print("\n\n⚠️  Base training interrupted by user")
     except Exception as e:

@@ -99,7 +99,8 @@ def train_model(
     train_config: TrainingConfig,
     checkpoint_path: str = None,
     output_dir: str = "checkpoints",
-    additional_steps: int = 0
+    additional_steps: int = 0,
+    load_optimizer_state: bool = True
 ):
     """Main training function
 
@@ -109,6 +110,7 @@ def train_model(
         checkpoint_path: Path to checkpoint to resume from
         output_dir: Directory to save checkpoints
         additional_steps: Additional steps to train beyond checkpoint (0 = use config max_steps)
+        load_optimizer_state: Whether to load optimizer/scheduler state from checkpoint (set False when switching optimizers)
     """
 
     os.makedirs(output_dir, exist_ok=True)
@@ -152,13 +154,17 @@ def train_model(
         model.load_state_dict(checkpoint['model_state_dict'])
         model.to(device)
 
-        if 'optimizer_states' in checkpoint:
-            for opt, opt_state in zip(optimizers, checkpoint['optimizer_states']):
-                opt.load_state_dict(opt_state)
+        if load_optimizer_state:
+            if 'optimizer_states' in checkpoint:
+                for opt, opt_state in zip(optimizers, checkpoint['optimizer_states']):
+                    opt.load_state_dict(opt_state)
 
-        if 'scheduler_states' in checkpoint:
-            for sch, sch_state in zip(schedulers, checkpoint['scheduler_states']):
-                sch.load_state_dict(sch_state)
+            if 'scheduler_states' in checkpoint:
+                for sch, sch_state in zip(schedulers, checkpoint['scheduler_states']):
+                    sch.load_state_dict(sch_state)
+            print("   Loaded optimizer and scheduler states")
+        else:
+            print("   Skipped loading optimizer/scheduler states (starting fresh)")
 
         start_step = checkpoint.get('step', 0)
         total_tokens_seen = checkpoint.get('total_tokens_seen', 0)
