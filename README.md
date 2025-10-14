@@ -111,12 +111,12 @@ But that last 20% still exists.
 
 ## 🧪 Model Testing
 
-Once your model has been pretrained, fine-tuned, reinforced, and traumatized —  
+Once your model has been pretrained, fine-tuned, reinforced, or not — at any point you want in fact... 
 you can finally **talk to it**.
 
 - Load your best checkpoint  
 - Type a prompt  
-- Watch your digital creation respond like a caffeinated philosopher  
+- Watch your digital creation respond 
 
 If it hallucinates, that’s part of the charm.
 
