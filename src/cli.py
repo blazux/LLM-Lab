@@ -5,11 +5,12 @@ import sys
 # Add src directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import ModelConfig, TrainingConfig, RLHFConfig
-from training import train_model, train_rlhf
+from config import ModelConfig, TrainingConfig, RLHFConfig, SFTConfig
+from training import train_model, train_rlhf, train_sft
 from inference import interactive_inference
 from model import POSITIONAL_ENCODINGS, ATTENTION_TYPES, ACTIVATION_TYPES
 from optimizers import OPTIMIZER_NAMES
+from data import list_dataset_splits
 
 
 def print_header():
@@ -24,9 +25,10 @@ def print_menu():
     print("\nMain Menu:")
     print("  1. Configure new model")
     print("  2. Base training")
-    print("  3. Test model (inference)")
+    print("  3. SFT training (Supervised Fine-Tuning)")
     print("  4. RLHF training (PPO/DPO)")
-    print("  5. Exit")
+    print("  5. Test model (inference)")
+    print("  6. Exit")
 
 
 def get_input(prompt: str, default=None, type_fn=str):
@@ -309,6 +311,186 @@ def start_training():
         raise
 
 
+def configure_sft():
+    """Interactive SFT configuration"""
+    print("\n" + "-" * 60)
+    print("SFT Configuration")
+    print("-" * 60)
+
+    config = SFTConfig()
+
+    # Policy checkpoint
+    print("\n🤖 Base Model")
+    config.policy_checkpoint = get_input(
+        "Base model checkpoint path",
+        default=config.policy_checkpoint
+    )
+
+    if not os.path.exists(config.policy_checkpoint):
+        print(f"❌ Base model checkpoint not found: {config.policy_checkpoint}")
+        return None
+
+    # Training parameters
+    print("\n⚙️  Training Hyperparameters")
+    config.batch_size = get_input("Batch size", default=config.batch_size, type_fn=int)
+    config.gradient_accumulation_steps = get_input(
+        "Gradient accumulation steps",
+        default=config.gradient_accumulation_steps,
+        type_fn=int
+    )
+    config.max_steps = get_input("Maximum training steps", default=config.max_steps, type_fn=int)
+
+    # Optimizer
+    print(f"\n🔧 Optimizer")
+    print(f"Options: {', '.join(OPTIMIZER_NAMES)}")
+    config.optimizer = get_input("Optimizer", default=config.optimizer)
+    config.learning_rate = get_input("Learning rate", default=config.learning_rate, type_fn=float)
+    config.weight_decay = get_input("Weight decay", default=config.weight_decay, type_fn=float)
+
+    # Scheduler
+    print(f"\n📈 Learning Rate Scheduler")
+    print("Options: none, cosine, linear, polynomial")
+    config.scheduler = get_input("Scheduler", default=config.scheduler)
+    config.warmup_steps = get_input("Warmup steps", default=config.warmup_steps, type_fn=int)
+
+    # Evaluation
+    print("\n📊 Evaluation")
+    config.eval_every = get_input("Eval every N steps", default=config.eval_every, type_fn=int)
+    config.eval_steps = get_input("Steps per evaluation", default=config.eval_steps, type_fn=int)
+
+    save_best = get_input("Save best model only? [y/n]", default="y")
+    config.save_best_only = save_best.lower() in ['y', 'yes']
+
+    # Dataset configuration
+    print("\n📚 Dataset Configuration")
+    print("Enter datasets (one per line, empty line to finish)")
+    print("Format: dataset_name | subset (optional) | split (optional) | weight (optional)")
+    print("\nExamples:")
+    print("  HuggingFaceTB/smoltalk2 | SFT | smoltalk_smollm3_everyday_conversations_no_think")
+    print("  OpenAssistant/oasst1 | | train | 1.5")
+    print("  HuggingFaceFW/fineweb-edu-sft | | train | 2.0")
+
+    datasets = []
+    while True:
+        dataset_input = input(f"\nDataset {len(datasets) + 1} (or press Enter to finish): ").strip()
+        if not dataset_input:
+            break
+
+        parts = [p.strip() for p in dataset_input.split('|')]
+        ds_name = parts[0]
+        ds_subset = parts[1] if len(parts) > 1 and parts[1] else None
+        ds_split = parts[2] if len(parts) > 2 and parts[2] else None
+        ds_weight = float(parts[3]) if len(parts) > 3 and parts[3] else None
+
+        # If no split provided, try to show available splits
+        if not ds_split:
+            print(f"\n  Fetching available splits for {ds_name}...")
+            available_splits = list_dataset_splits(ds_name, ds_subset)
+            if available_splits:
+                print(f"  Available splits ({len(available_splits)} total):")
+                # Show splits in a nice format
+                for i, split in enumerate(available_splits[:15], 1):
+                    print(f"    {i}. {split}")
+                if len(available_splits) > 15:
+                    print(f"    ... and {len(available_splits) - 15} more")
+
+                # Let user choose
+                split_choice = input(f"\n  Enter split name or number (1-{len(available_splits)}): ").strip()
+                if split_choice.isdigit():
+                    idx = int(split_choice) - 1
+                    if 0 <= idx < len(available_splits):
+                        ds_split = available_splits[idx]
+                else:
+                    ds_split = split_choice
+
+            if not ds_split:
+                print("  ⚠️  No split specified, skipping this dataset")
+                continue
+
+        ds_config = {"name": ds_name, "split": ds_split}
+        if ds_subset:
+            ds_config["subset"] = ds_subset
+        if ds_weight:
+            ds_config["weight"] = ds_weight
+
+        datasets.append(ds_config)
+        weight_str = f" (weight: {ds_weight})" if ds_weight else ""
+        print(f"  Added: {ds_name}" + (f" ({ds_subset})" if ds_subset else "") + f" [split: {ds_split}]" + weight_str)
+
+    if datasets:
+        config.datasets = datasets
+    else:
+        print("Using default dataset: HuggingFaceTB/smoltalk2 (SFT, everyday conversations)")
+
+    # Save config
+    save_path = get_input("\n💾 Save SFT config to", default="sft_config.json")
+    config.save(save_path)
+
+    print(f"\n✅ SFT configuration saved to: {save_path}")
+    return config
+
+
+def start_sft_training():
+    """Start SFT training"""
+    print("\n" + "-" * 60)
+    print("Start SFT Training")
+    print("-" * 60)
+
+    # Option to use existing config or create new
+    choice = get_input(
+        "\n1. Use existing SFT config\n2. Configure new SFT training\nChoice",
+        default="1"
+    )
+
+    if choice == "2":
+        config = configure_sft()
+        if config is None:
+            return
+    else:
+        config_path = get_input("SFT config path", default="sft_config.json")
+        if not os.path.exists(config_path):
+            print(f"❌ SFT config not found: {config_path}")
+            return
+
+        config = SFTConfig.load(config_path)
+
+    # Output directory
+    config.output_dir = get_input("\nOutput directory", default=config.output_dir)
+
+    # Confirm and start
+    print("\n" + "=" * 60)
+    print(f"Ready to start SFT training!")
+    print(f"  Base model: {config.policy_checkpoint}")
+    print(f"\n  Datasets:")
+    for ds in config.datasets:
+        ds_name = ds.get('name', 'unknown')
+        ds_subset = ds.get('subset', None)
+        ds_split = ds.get('split', 'train')
+        print(f"    - {ds_name}")
+        if ds_subset:
+            print(f"      Subset: {ds_subset}")
+        print(f"      Split: {ds_split}")
+    print(f"\n  Steps: {config.max_steps}")
+    print(f"  Optimizer: {config.optimizer}")
+    print(f"  Batch size: {config.batch_size}")
+    print(f"  Learning rate: {config.learning_rate}")
+    print("=" * 60)
+
+    confirm = get_input("\nStart SFT training? [y/n]", default="y")
+    if confirm.lower() not in ['y', 'yes']:
+        print("SFT training cancelled.")
+        return
+
+    # Start training
+    try:
+        train_sft(config)
+    except KeyboardInterrupt:
+        print("\n\n⚠️  SFT training interrupted by user")
+    except Exception as e:
+        print(f"\n\n❌ SFT training failed: {e}")
+        raise
+
+
 def start_inference():
     """Start inference mode"""
     print("\n" + "-" * 60)
@@ -525,10 +707,12 @@ def main():
         elif choice == "2":
             start_training()
         elif choice == "3":
-            start_inference()
+            start_sft_training()
         elif choice == "4":
             start_rlhf_training()
         elif choice == "5":
+            start_inference()
+        elif choice == "6":
             print("\n👋 Goodbye!")
             sys.exit(0)
         else:
