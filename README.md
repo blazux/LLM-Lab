@@ -73,10 +73,10 @@ The token counter resets. The suffering does not.
 
 ## 🧠 RLHF (Reinforcement Learning from Human Feedback)
 
-Because supervised fine-tuning teaches “what to say,”  
-but **RLHF teaches “how to say it to please humans.”**
+Because supervised fine-tuning teaches "what to say,"
+but **RLHF teaches "how to say it to please humans."**
 
-Currently supports **PPO** and **DPO**, the two main schools of reinforcement enlightenment.
+Currently supports **PPO**, **DPO**, and **GRPO** — three paths to preference alignment, each with its own philosophy.
 
 ---
 
@@ -96,16 +96,35 @@ Expect slow improvement, occasional reward spikes, and philosophical questions l
 
 ### 🧘 DPO (Direct Preference Optimization)
 
-PPO’s calmer, mathier cousin.  
+PPO's calmer, mathier cousin.
 No sampling loops, no KL penalties — just clean, supervised gradients based on preferences.
 
-- **Reference model** → usually your SFT model (or leave blank to use the same).  
-- **Batch / Mini-batch / LR / etc.** → same logic as before.  
-- **Beta** → controls how strongly the model obeys the reward (too high = robotic, too low = chaotic).  
+- **Reference model** → usually your SFT model (or leave blank to use the same).
+- **Batch / Mini-batch / LR / etc.** → same logic as before.
+- **Beta** → controls how strongly the model obeys the reward (too high = robotic, too low = chaotic).
 - **Dataset** → must include human preference pairs (good/bad responses).
 
-DPO is simple, elegant, and 80% less likely to explode.  
+DPO is simple, elegant, and 80% less likely to explode.
 But that last 20% still exists.
+
+---
+
+### 🎯 GRPO (Group Relative Policy Optimization)
+
+The efficient middle ground — simpler than PPO, more sample-efficient than both.
+GRPO generates **multiple responses per prompt**, then learns from group comparisons.
+
+- **Reward model** → same as PPO (e.g., `OpenAssistant/reward-model-deberta-v3-large-v2`).
+- **Group size** → how many responses to generate per prompt (default: 4). More = better exploration, slower training.
+- **GRPO temperature** → sampling temperature for generating response groups (default: 1.0). Higher = more diverse outputs.
+- **Batch / Mini-batch / LR / etc.** → familiar territory.
+- **Dataset** → any prompt dataset works (same as PPO).
+
+The magic: instead of comparing to a value function (PPO) or a reference model (DPO),
+GRPO compares each response to the **group average** — reinforcing what's relatively better.
+
+Faster than PPO, no reference model needed like DPO, and surprisingly stable.
+Your mileage may vary, but at least it won't take forever.
 
 ---
 
