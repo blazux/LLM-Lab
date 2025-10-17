@@ -1056,16 +1056,4 @@ RLHF:
 
 ---
 
-## Conclusion
-
-This documentation covers the complete LLM training pipeline. Remember:
-
-1. **Start simple** - Test with small models first
-2. **Monitor everything** - Loss curves are your best friend
-3. **Iterate quickly** - Fast experiments beat perfect planning
-4. **Save everything** - Configs, checkpoints, notes
-5. **Test frequently** - Inference is the ultimate validation
-
-For questions, issues, or bugs, check the GitHub repository.
-
 Happy training! 🚀
