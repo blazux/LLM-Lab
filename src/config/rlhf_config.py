@@ -64,6 +64,14 @@ class RLHFConfig:
     # Output
     output_dir: str = "rlhf_checkpoints"
 
+    # LoRA Configuration (Parameter-Efficient Fine-Tuning)
+    use_lora: bool = False
+    lora_preset: str = "minimal"  # Options: "minimal", "attention_only", "ffn_only", "all", "custom"
+    lora_target_modules: Optional[List[str]] = None  # Used only if lora_preset="custom"
+    lora_r: int = 8  # LoRA rank
+    lora_alpha: int = 16  # LoRA alpha (scaling factor)
+    lora_dropout: float = 0.05  # LoRA dropout rate
+
     # Resume
     resume_from: Optional[str] = None
 

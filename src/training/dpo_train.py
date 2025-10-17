@@ -14,7 +14,7 @@ from config import RLHFConfig
 from data import load_tokenizer
 
 
-def load_policy_model(checkpoint_path: str, device: torch.device):
+def load_policy_model(checkpoint_path: str, device: torch.device, rlhf_config: Optional[RLHFConfig] = None):
     """Load policy model from checkpoint"""
     print(f"Loading policy model from {checkpoint_path}...")
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -22,6 +22,24 @@ def load_policy_model(checkpoint_path: str, device: torch.device):
     model_config = checkpoint['model_config']
     model = TransformerLLM(model_config)
     model.load_state_dict(checkpoint['model_state_dict'])
+
+    # Apply LoRA if configured
+    if rlhf_config and rlhf_config.use_lora:
+        print("\n🔧 Applying LoRA for parameter-efficient fine-tuning...")
+        from model.lora_utils import apply_lora_to_model
+
+        lora_config_dict = {
+            'use_lora': rlhf_config.use_lora,
+            'lora_preset': rlhf_config.lora_preset,
+            'lora_target_modules': rlhf_config.lora_target_modules,
+            'lora_r': rlhf_config.lora_r,
+            'lora_alpha': rlhf_config.lora_alpha,
+            'lora_dropout': rlhf_config.lora_dropout
+        }
+
+        model = apply_lora_to_model(model, model_config, lora_config_dict)
+        print(f"   ✓ LoRA applied with preset: {rlhf_config.lora_preset}")
+
     model = model.to(device)
 
     tokenizer = load_tokenizer(model_config.tokenizer_name)
@@ -273,9 +291,10 @@ def train_dpo(config: RLHFConfig):
     print(f"Device: {device}")
 
     # Load policy model
-    policy_model, tokenizer, model_config = load_policy_model(config.policy_checkpoint, device)
+    policy_model, tokenizer, model_config = load_policy_model(config.policy_checkpoint, device, config)
 
     # Load reference model (if not specified, use same checkpoint as policy)
+    # Note: Reference model is NOT modified with LoRA (it stays frozen)
     reference_checkpoint = config.reference_checkpoint or config.policy_checkpoint
     reference_model = load_reference_model(reference_checkpoint, device)
 
@@ -414,15 +433,32 @@ def train_dpo(config: RLHFConfig):
 
             # Save checkpoint
             if step % config.save_every == 0:
-                checkpoint_path = os.path.join(config.output_dir, f"dpo_step_{step}.pt")
-                torch.save({
-                    'step': step,
-                    'model_state_dict': policy_model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'model_config': model_config,
-                    'rlhf_config': config,
-                }, checkpoint_path)
-                print(f"💾 Checkpoint saved: {checkpoint_path}")
+                if config.use_lora:
+                    # For LoRA training: only save adapters
+                    adapter_dir = os.path.join(config.output_dir, f"lora_adapters_step_{step}")
+                    policy_model.save_pretrained(adapter_dir)
+                    print(f"💾 Saved LoRA adapters checkpoint (step {step})")
+
+                    # Save metadata
+                    import json
+                    metadata = {
+                        'step': step,
+                        'base_checkpoint': config.policy_checkpoint,
+                        'algorithm': 'dpo'
+                    }
+                    with open(os.path.join(adapter_dir, "training_metadata.json"), 'w') as f:
+                        json.dump(metadata, f, indent=2)
+                else:
+                    # For full fine-tuning: save complete checkpoint
+                    checkpoint_path = os.path.join(config.output_dir, f"dpo_step_{step}.pt")
+                    torch.save({
+                        'step': step,
+                        'model_state_dict': policy_model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'model_config': model_config,
+                        'rlhf_config': config,
+                    }, checkpoint_path)
+                    print(f"💾 Checkpoint saved: {checkpoint_path}")
 
             # Evaluation
             if step % config.eval_every == 0:
@@ -438,16 +474,33 @@ def train_dpo(config: RLHFConfig):
         print("\n⚠️  Training interrupted by user")
 
     # Save final checkpoint
-    final_path = os.path.join(config.output_dir, "final_model.pt")
-    torch.save({
-        'step': step,
-        'model_state_dict': policy_model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'model_config': model_config,
-        'rlhf_config': config,
-    }, final_path)
+    if config.use_lora:
+        # For LoRA training: only save adapters
+        adapter_dir = os.path.join(config.output_dir, "final_lora_adapters")
+        policy_model.save_pretrained(adapter_dir)
+        print(f"💾 Saved final LoRA adapters")
+
+        # Save metadata
+        import json
+        metadata = {
+            'step': step,
+            'base_checkpoint': config.policy_checkpoint,
+            'algorithm': 'dpo'
+        }
+        with open(os.path.join(adapter_dir, "training_metadata.json"), 'w') as f:
+            json.dump(metadata, f, indent=2)
+    else:
+        # For full fine-tuning: save complete checkpoint
+        final_path = os.path.join(config.output_dir, "final_model.pt")
+        torch.save({
+            'step': step,
+            'model_state_dict': policy_model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'model_config': model_config,
+            'rlhf_config': config,
+        }, final_path)
+        print(f"💾 Saved final model checkpoint: {final_path}")
 
     print(f"\n✅ Training complete!")
-    print(f"Final model saved: {final_path}")
     print(f"Total steps: {step}")
     print(f"Total time: {(time.time() - start_time) / 60:.1f} minutes")

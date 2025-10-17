@@ -271,6 +271,23 @@ def train_sft(config: SFTConfig):
 
         print(f"   ✓ Added {tokenizer_vocab_size - old_vocab_size} new token embeddings")
 
+    # Apply LoRA if configured
+    if config.use_lora:
+        print("\n🔧 Applying LoRA for parameter-efficient fine-tuning...")
+        from model.lora_utils import apply_lora_to_model
+
+        lora_config_dict = {
+            'use_lora': config.use_lora,
+            'lora_preset': config.lora_preset,
+            'lora_target_modules': config.lora_target_modules,
+            'lora_r': config.lora_r,
+            'lora_alpha': config.lora_alpha,
+            'lora_dropout': config.lora_dropout
+        }
+
+        model = apply_lora_to_model(model, model_config, lora_config_dict)
+        print(f"   ✓ LoRA applied with preset: {config.lora_preset}")
+
     model = model.to(device)
 
     total_params = model.count_parameters()
@@ -386,32 +403,67 @@ def train_sft(config: SFTConfig):
             if eval_metrics['val_loss'] < best_val_loss:
                 best_val_loss = eval_metrics['val_loss']
 
-                checkpoint_data = {
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state': optimizer.state_dict(),
-                    'scheduler_state': scheduler.state_dict(),
-                    'model_config': model_config,
-                    'sft_config': config,
-                    'step': step,
-                    'best_val_loss': best_val_loss,
-                    'eval_metrics': eval_metrics
-                }
+                if config.use_lora:
+                    # For LoRA training: only save adapters (base model is frozen)
+                    adapter_dir = f"{config.output_dir}/best_lora_adapters"
+                    model.save_pretrained(adapter_dir)
+                    print(f"   💾 Saved best LoRA adapters (val_loss={best_val_loss:.4f})")
 
-                torch.save(checkpoint_data, f"{config.output_dir}/best_model.pt")
-                print(f"   💾 Saved best SFT model (val_loss={best_val_loss:.4f})")
+                    # Save minimal metadata separately
+                    import json
+                    metadata = {
+                        'step': step,
+                        'best_val_loss': best_val_loss,
+                        'eval_metrics': eval_metrics,
+                        'base_checkpoint': config.policy_checkpoint,  # Reference to base model
+                    }
+                    with open(f"{config.output_dir}/best_lora_adapters/training_metadata.json", 'w') as f:
+                        json.dump(metadata, f, indent=2, default=str)
+                else:
+                    # For full fine-tuning: save complete checkpoint
+                    checkpoint_data = {
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state': optimizer.state_dict(),
+                        'scheduler_state': scheduler.state_dict(),
+                        'model_config': model_config,
+                        'sft_config': config,
+                        'step': step,
+                        'best_val_loss': best_val_loss,
+                        'eval_metrics': eval_metrics
+                    }
+
+                    torch.save(checkpoint_data, f"{config.output_dir}/best_model.pt")
+                    print(f"   💾 Saved best SFT model (val_loss={best_val_loss:.4f})")
 
             # Save checkpoint periodically
             if not config.save_best_only and step % config.save_every == 0:
-                checkpoint_data = {
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state': optimizer.state_dict(),
-                    'scheduler_state': scheduler.state_dict(),
-                    'model_config': model_config,
-                    'sft_config': config,
-                    'step': step,
-                    'eval_metrics': eval_metrics
-                }
-                torch.save(checkpoint_data, f"{config.output_dir}/checkpoint_step_{step}.pt")
+                if config.use_lora:
+                    # For LoRA training: only save adapters
+                    adapter_dir = f"{config.output_dir}/lora_adapters_step_{step}"
+                    model.save_pretrained(adapter_dir)
+                    print(f"   💾 Saved LoRA adapters checkpoint (step {step})")
+
+                    # Save metadata
+                    import json
+                    metadata = {
+                        'step': step,
+                        'eval_metrics': eval_metrics,
+                        'base_checkpoint': config.policy_checkpoint,
+                    }
+                    with open(f"{adapter_dir}/training_metadata.json", 'w') as f:
+                        json.dump(metadata, f, indent=2, default=str)
+                else:
+                    # For full fine-tuning: save complete checkpoint
+                    checkpoint_data = {
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state': optimizer.state_dict(),
+                        'scheduler_state': scheduler.state_dict(),
+                        'model_config': model_config,
+                        'sft_config': config,
+                        'step': step,
+                        'eval_metrics': eval_metrics
+                    }
+                    torch.save(checkpoint_data, f"{config.output_dir}/checkpoint_step_{step}.pt")
 
         step += 1
         pbar.update(1)
@@ -426,15 +478,33 @@ def train_sft(config: SFTConfig):
     print(f"   Final Perplexity: {final_eval['val_perplexity']:.2f}")
 
     # Save final model
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'optimizer_state': optimizer.state_dict(),
-        'scheduler_state': scheduler.state_dict(),
-        'model_config': model_config,
-        'sft_config': config,
-        'step': step,
-        'final_metrics': final_eval
-    }, f"{config.output_dir}/final_model.pt")
+    if config.use_lora:
+        # For LoRA training: only save adapters
+        adapter_dir = f"{config.output_dir}/final_lora_adapters"
+        model.save_pretrained(adapter_dir)
+        print(f"💾 Saved final LoRA adapters")
+
+        # Save metadata
+        import json
+        metadata = {
+            'step': step,
+            'final_metrics': final_eval,
+            'base_checkpoint': config.policy_checkpoint,
+        }
+        with open(f"{adapter_dir}/training_metadata.json", 'w') as f:
+            json.dump(metadata, f, indent=2, default=str)
+    else:
+        # For full fine-tuning: save complete checkpoint
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state': optimizer.state_dict(),
+            'scheduler_state': scheduler.state_dict(),
+            'model_config': model_config,
+            'sft_config': config,
+            'step': step,
+            'final_metrics': final_eval
+        }, f"{config.output_dir}/final_model.pt")
+        print(f"💾 Saved final model checkpoint")
 
     training_time = time.time() - start_time
     print(f"\n✅ SFT training completed in {training_time / 60:.1f} minutes")

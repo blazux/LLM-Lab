@@ -16,7 +16,7 @@ from data import list_dataset_splits
 def print_header():
     """Print CLI header"""
     print("\n" + "=" * 60)
-    print(" " * 15 + "🧠 Simple LLM Builder")
+    print(" " * 15 + "🧠 LLM-Laboratory")
     print("=" * 60)
 
 
@@ -27,8 +27,9 @@ def print_menu():
     print("  2. Base training")
     print("  3. SFT training (Supervised Fine-Tuning)")
     print("  4. RLHF training (PPO/DPO/GRPO)")
-    print("  5. Test model (inference)")
-    print("  6. Exit")
+    print("  5. Merge LoRA adapters")
+    print("  6. Test model (inference)")
+    print("  7. Exit")
 
 
 def get_input(prompt: str, default=None, type_fn=str):
@@ -361,6 +362,47 @@ def configure_sft():
     save_best = get_input("Save best model only? [y/n]", default="y")
     config.save_best_only = save_best.lower() in ['y', 'yes']
 
+    # LoRA configuration
+    print("\n🔧 LoRA (Parameter-Efficient Fine-Tuning)")
+    use_lora = get_input("Use LoRA? [y/n]", default="n")
+    config.use_lora = use_lora.lower() in ['y', 'yes']
+
+    if config.use_lora:
+        # Load model config to determine available presets
+        import torch
+        try:
+            checkpoint = torch.load(config.policy_checkpoint, map_location="cpu", weights_only=False)
+            model_config = checkpoint.get('model_config')
+
+            if model_config:
+                from model.lora_utils import get_available_presets
+                presets = get_available_presets(model_config)
+
+                print("\nAvailable LoRA presets:")
+                for preset_name, description in presets.items():
+                    print(f"  {preset_name}: {description}")
+
+                config.lora_preset = get_input("LoRA preset", default=config.lora_preset)
+
+                if config.lora_preset == "custom":
+                    print("\nEnter target modules (comma-separated)")
+                    print("Examples: q_proj,v_proj or gate_proj,up_proj,down_proj")
+                    modules_str = input("Target modules: ").strip()
+                    if modules_str:
+                        config.lora_target_modules = [m.strip() for m in modules_str.split(',')]
+            else:
+                print("⚠️  Could not load model config from checkpoint")
+                print("   Using default preset")
+                config.lora_preset = get_input("LoRA preset", default=config.lora_preset)
+        except Exception as e:
+            print(f"⚠️  Could not load checkpoint: {e}")
+            print("   Using default preset")
+            config.lora_preset = get_input("LoRA preset", default=config.lora_preset)
+
+        config.lora_r = get_input("LoRA rank (r)", default=config.lora_r, type_fn=int)
+        config.lora_alpha = get_input("LoRA alpha", default=config.lora_alpha, type_fn=int)
+        config.lora_dropout = get_input("LoRA dropout", default=config.lora_dropout, type_fn=float)
+
     # Dataset configuration
     print("\n📚 Dataset Configuration")
     print("Enter datasets (one per line, empty line to finish)")
@@ -491,6 +533,240 @@ def start_sft_training():
         raise
 
 
+def merge_lora_adapters():
+    """Merge LoRA adapters into base model"""
+    print("\n" + "-" * 60)
+    print("Merge LoRA Adapters")
+    print("-" * 60)
+
+    print("\nThis tool merges LoRA adapter weights back into the base model.")
+    print("Use this after LoRA training to create a standard checkpoint for RLHF.\n")
+
+    # Ask for input type
+    print("Choose input type:")
+    print("  1. Full checkpoint (.pt file) - contains base model + LoRA")
+    print("  2. Adapter folder - lightweight adapters saved by PEFT")
+    input_type = get_input("Input type", default="2")
+
+    import torch
+
+    try:
+        if input_type == "2":
+            # Load from adapter folder (new method)
+            adapter_path = get_input("LoRA adapter folder path", default="sft_checkpoints/best_lora_adapters")
+
+            if not os.path.exists(adapter_path):
+                print(f"❌ Adapter folder not found: {adapter_path}")
+                return
+
+            # Check for adapter files
+            adapter_config_file = os.path.join(adapter_path, "adapter_config.json")
+            if not os.path.exists(adapter_config_file):
+                print(f"❌ Not a valid adapter folder: missing adapter_config.json")
+                return
+
+            # Get base model checkpoint
+            base_checkpoint_path = get_input("Base model checkpoint path", default="checkpoints/best_model.pt")
+
+            if not os.path.exists(base_checkpoint_path):
+                print(f"❌ Base checkpoint not found: {base_checkpoint_path}")
+                return
+
+            print(f"\n🔄 Loading base model from {base_checkpoint_path}...")
+            checkpoint = torch.load(base_checkpoint_path, map_location="cpu", weights_only=False)
+
+            if 'model_config' not in checkpoint:
+                print("❌ Checkpoint does not contain model_config")
+                return
+
+            model_config = checkpoint['model_config']
+
+            # Create base model
+            from model import TransformerLLM
+            print("🔧 Creating base model...")
+            base_model = TransformerLLM(model_config)
+            base_model.load_state_dict(checkpoint['model_state_dict'])
+
+            # Load PEFT model with adapters
+            from peft import PeftModel
+            print(f"📥 Loading LoRA adapters from {adapter_path}...")
+            peft_model = PeftModel.from_pretrained(base_model, adapter_path)
+
+            # Merge adapters
+            print("🔀 Merging LoRA adapters into base model...")
+            merged_model = peft_model.merge_and_unload()
+
+            print("✓ Successfully merged LoRA adapters!")
+
+            # Save merged model
+            output_path = get_input("\n💾 Save merged model to",
+                                   default=base_checkpoint_path.replace('.pt', '_merged.pt'))
+
+            print(f"\n💾 Saving merged model to {output_path}...")
+
+            # Prepare checkpoint data
+            merged_checkpoint = {
+                'model_state_dict': merged_model.state_dict(),
+                'model_config': model_config,
+            }
+
+            # Copy over other metadata if available
+            for key in ['step', 'best_val_loss', 'eval_metrics', 'final_metrics']:
+                if key in checkpoint:
+                    merged_checkpoint[key] = checkpoint[key]
+
+            torch.save(merged_checkpoint, output_path)
+
+            print("\n✅ Successfully merged and saved!")
+            print(f"   Merged checkpoint: {output_path}")
+            print(f"   Base model: {base_checkpoint_path}")
+            print(f"   Adapters: {adapter_path}")
+            print("\n💡 You can now use the merged checkpoint for RLHF training without LoRA.")
+            return
+
+        # Original method: Load from full checkpoint
+        checkpoint_path = get_input("LoRA checkpoint path", default="sft_checkpoints/best_model.pt")
+
+        if not os.path.exists(checkpoint_path):
+            print(f"❌ Checkpoint not found: {checkpoint_path}")
+            return
+
+        # Load checkpoint
+        print(f"\n🔄 Loading checkpoint from {checkpoint_path}...")
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+        # Get model config
+        if 'model_config' not in checkpoint:
+            print("❌ Checkpoint does not contain model_config")
+            return
+
+        model_config = checkpoint['model_config']
+
+        # Check if checkpoint has LoRA parameters
+        state_dict = checkpoint['model_state_dict']
+        has_lora = any('lora' in key.lower() for key in state_dict.keys())
+
+        if not has_lora:
+            print("⚠️  This checkpoint doesn't appear to have LoRA parameters")
+            print("   It may already be a merged model.")
+            proceed = get_input("Continue anyway? [y/n]", default="n")
+            if proceed.lower() not in ['y', 'yes']:
+                return
+        else:
+            print(f"✓ Detected LoRA parameters in checkpoint")
+            lora_params = [key for key in state_dict.keys() if 'lora' in key.lower()]
+            print(f"   Found {len(lora_params)} LoRA parameter tensors")
+
+        # Create base model
+        from model import TransformerLLM
+        print("\n🔧 Creating base model...")
+        base_model = TransformerLLM(model_config)
+
+        # Load state dict (with LoRA parameters)
+        print("📥 Loading state dict...")
+        try:
+            # Try to load directly first
+            base_model.load_state_dict(state_dict, strict=False)
+
+            # Now apply PEFT to load LoRA properly
+            from peft import PeftModel
+
+            # We need to reconstruct the PEFT model to merge properly
+            # This is a bit tricky - we need to know the LoRA config
+            # Let's try to infer it or ask the user
+
+            print("\n🔧 Detecting LoRA configuration...")
+
+            # Try to load LoRA config from checkpoint if available
+            lora_config_dict = None
+            if 'sft_config' in checkpoint and hasattr(checkpoint['sft_config'], 'use_lora'):
+                sft_config = checkpoint['sft_config']
+                if sft_config.use_lora:
+                    lora_config_dict = {
+                        'use_lora': True,
+                        'lora_preset': sft_config.lora_preset,
+                        'lora_target_modules': sft_config.lora_target_modules,
+                        'lora_r': sft_config.lora_r,
+                        'lora_alpha': sft_config.lora_alpha,
+                        'lora_dropout': sft_config.lora_dropout
+                    }
+                    print(f"✓ Found LoRA config: preset={sft_config.lora_preset}, r={sft_config.lora_r}")
+            elif 'rlhf_config' in checkpoint and hasattr(checkpoint['rlhf_config'], 'use_lora'):
+                rlhf_config = checkpoint['rlhf_config']
+                if rlhf_config.use_lora:
+                    lora_config_dict = {
+                        'use_lora': True,
+                        'lora_preset': rlhf_config.lora_preset,
+                        'lora_target_modules': rlhf_config.lora_target_modules,
+                        'lora_r': rlhf_config.lora_r,
+                        'lora_alpha': rlhf_config.lora_alpha,
+                        'lora_dropout': rlhf_config.lora_dropout
+                    }
+                    print(f"✓ Found LoRA config: preset={rlhf_config.lora_preset}, r={rlhf_config.lora_r}")
+
+            if lora_config_dict is None:
+                print("⚠️  Could not find LoRA config in checkpoint")
+                print("   Cannot automatically merge adapters")
+                print("\n💡 Tip: If this is a LoRA checkpoint, it should contain SFTConfig or RLHFConfig")
+                return
+
+            # Apply LoRA to create PEFT model
+            from model.lora_utils import apply_lora_to_model
+            print("\n🔧 Applying LoRA configuration...")
+            peft_model = apply_lora_to_model(base_model, model_config, lora_config_dict)
+
+            # Load the state dict into PEFT model
+            print("📥 Loading LoRA weights...")
+            peft_model.load_state_dict(state_dict)
+
+            # Merge adapters
+            print("\n🔀 Merging LoRA adapters into base model...")
+            merged_model = peft_model.merge_and_unload()
+
+            print("✓ Successfully merged LoRA adapters!")
+
+        except Exception as e:
+            print(f"❌ Failed to merge LoRA adapters: {e}")
+            print("\nThis might happen if:")
+            print("  1. The checkpoint doesn't have proper LoRA parameters")
+            print("  2. The LoRA configuration is incompatible")
+            print("  3. PEFT library version mismatch")
+            return
+
+        # Save merged model
+        output_path = get_input("\n💾 Save merged model to",
+                               default=checkpoint_path.replace('.pt', '_merged.pt'))
+
+        print(f"\n💾 Saving merged model to {output_path}...")
+
+        # Prepare checkpoint data (without LoRA-specific info)
+        merged_checkpoint = {
+            'model_state_dict': merged_model.state_dict(),
+            'model_config': model_config,
+        }
+
+        # Optionally include other metadata (but remove LoRA configs)
+        if 'step' in checkpoint:
+            merged_checkpoint['step'] = checkpoint['step']
+        if 'best_val_loss' in checkpoint:
+            merged_checkpoint['best_val_loss'] = checkpoint['best_val_loss']
+        if 'eval_metrics' in checkpoint:
+            merged_checkpoint['eval_metrics'] = checkpoint['eval_metrics']
+        if 'final_metrics' in checkpoint:
+            merged_checkpoint['final_metrics'] = checkpoint['final_metrics']
+
+        torch.save(merged_checkpoint, output_path)
+
+        print("\n✅ Successfully merged and saved!")
+        print(f"   Merged checkpoint: {output_path}")
+        print(f"   Original checkpoint: {checkpoint_path}")
+        print("\n💡 You can now use the merged checkpoint for RLHF training without LoRA.")
+
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        raise
+
+
 def start_inference():
     """Start inference mode"""
     print("\n" + "-" * 60)
@@ -616,6 +892,47 @@ def configure_rlhf():
     config.max_new_tokens = get_input("Max new tokens", default=config.max_new_tokens, type_fn=int)
     config.temperature = get_input("Temperature", default=config.temperature, type_fn=float)
 
+    # LoRA configuration
+    print("\n🔧 LoRA (Parameter-Efficient Fine-Tuning)")
+    use_lora = get_input("Use LoRA? [y/n]", default="n")
+    config.use_lora = use_lora.lower() in ['y', 'yes']
+
+    if config.use_lora:
+        # Load model config to determine available presets
+        import torch
+        try:
+            checkpoint = torch.load(config.policy_checkpoint, map_location="cpu", weights_only=False)
+            model_config = checkpoint.get('model_config')
+
+            if model_config:
+                from model.lora_utils import get_available_presets
+                presets = get_available_presets(model_config)
+
+                print("\nAvailable LoRA presets:")
+                for preset_name, description in presets.items():
+                    print(f"  {preset_name}: {description}")
+
+                config.lora_preset = get_input("LoRA preset", default=config.lora_preset)
+
+                if config.lora_preset == "custom":
+                    print("\nEnter target modules (comma-separated)")
+                    print("Examples: q_proj,v_proj or gate_proj,up_proj,down_proj")
+                    modules_str = input("Target modules: ").strip()
+                    if modules_str:
+                        config.lora_target_modules = [m.strip() for m in modules_str.split(',')]
+            else:
+                print("⚠️  Could not load model config from checkpoint")
+                print("   Using default preset")
+                config.lora_preset = get_input("LoRA preset", default=config.lora_preset)
+        except Exception as e:
+            print(f"⚠️  Could not load checkpoint: {e}")
+            print("   Using default preset")
+            config.lora_preset = get_input("LoRA preset", default=config.lora_preset)
+
+        config.lora_r = get_input("LoRA rank (r)", default=config.lora_r, type_fn=int)
+        config.lora_alpha = get_input("LoRA alpha", default=config.lora_alpha, type_fn=int)
+        config.lora_dropout = get_input("LoRA dropout", default=config.lora_dropout, type_fn=float)
+
     # Dataset configuration
     print("\n📚 Dataset Configuration")
     print("Enter datasets (one per line, empty line to finish)")
@@ -734,8 +1051,10 @@ def main():
         elif choice == "4":
             start_rlhf_training()
         elif choice == "5":
-            start_inference()
+            merge_lora_adapters()
         elif choice == "6":
+            start_inference()
+        elif choice == "7":
             print("\n👋 Goodbye!")
             sys.exit(0)
         else:

@@ -123,13 +123,20 @@ class TransformerLLM(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, x, use_checkpoint: bool = False):
+    def forward(self, x=None, input_ids=None, use_checkpoint: bool = False, **kwargs):
         """
         Forward pass
         Args:
-            x: input token ids (batch, seq_len)
+            x: input token ids (batch, seq_len) - for backward compatibility
+            input_ids: input token ids (batch, seq_len) - for PEFT compatibility
             use_checkpoint: whether to use gradient checkpointing
         """
+        # Handle both calling conventions (x for legacy, input_ids for PEFT)
+        if input_ids is not None:
+            x = input_ids
+        elif x is None:
+            raise ValueError("Either 'x' or 'input_ids' must be provided")
+
         # Embedding with scaling
         x = self.token_embedding(x) * math.sqrt(self.config.d_model)
 
@@ -155,3 +162,29 @@ class TransformerLLM(nn.Module):
     def count_parameters(self):
         """Count total trainable parameters"""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    # PEFT compatibility methods
+    def prepare_inputs_for_generation(self, input_ids, **kwargs):
+        """Prepare inputs for generation (PEFT compatibility)"""
+        return {"input_ids": input_ids}
+
+    def _reorder_cache(self, past_key_values, beam_idx):
+        """Reorder cache for beam search (PEFT compatibility)"""
+        # Not used in training, but PEFT may check for it
+        return past_key_values
+
+    def get_input_embeddings(self):
+        """Get input embedding layer (PEFT compatibility)"""
+        return self.token_embedding
+
+    def set_input_embeddings(self, new_embeddings):
+        """Set input embedding layer (PEFT compatibility)"""
+        self.token_embedding = new_embeddings
+
+    def get_output_embeddings(self):
+        """Get output embedding layer (PEFT compatibility)"""
+        return self.lm_head
+
+    def set_output_embeddings(self, new_embeddings):
+        """Set output embedding layer (PEFT compatibility)"""
+        self.lm_head = new_embeddings

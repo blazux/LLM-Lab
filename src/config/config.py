@@ -29,6 +29,11 @@ class ModelConfig:
     attention_bias: bool = False
     norm_eps: float = 1e-6
 
+    # PEFT compatibility attributes
+    tie_word_embeddings: bool = True  # We do tie embeddings in model.py
+    is_encoder_decoder: bool = False  # Decoder-only model
+    model_type: str = "custom_transformer"  # Custom model type
+
     def __post_init__(self):
         """Validate configuration"""
         assert self.d_model % self.n_heads == 0, "d_model must be divisible by n_heads"
@@ -38,6 +43,14 @@ class ModelConfig:
         self.d_k = self.d_model // self.n_heads
         if self.attention_type == "gqa":
             self.n_kv_groups = self.n_heads // self.n_kv_heads
+
+    def get(self, key: str, default=None):
+        """Dict-like get method for PEFT compatibility"""
+        return getattr(self, key, default)
+
+    def __contains__(self, key: str):
+        """Dict-like 'in' operator for PEFT compatibility"""
+        return hasattr(self, key)
 
     def count_params(self) -> int:
         """Estimate total number of parameters"""
