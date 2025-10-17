@@ -8,7 +8,7 @@ class RLHFConfig:
     """RLHF training configuration (PPO or DPO)"""
 
     # Algorithm Selection
-    algorithm: str = "ppo"  # Options: "ppo" or "dpo"
+    algorithm: str = "ppo"  # Options: "ppo", "dpo", or "grpo"
 
     # Policy Model
     policy_checkpoint: str = "checkpoints/best_model.pt"
@@ -47,6 +47,10 @@ class RLHFConfig:
     top_k: int = 0
     top_p: float = 1.0
 
+    # GRPO-specific parameters
+    group_size: int = 4  # Number of responses to generate per prompt (GRPO only)
+    grpo_temperature: float = 1.0  # Generation temperature for GRPO groups
+
     # Optimizer
     weight_decay: float = 0.0
     max_grad_norm: float = 1.0
@@ -66,8 +70,8 @@ class RLHFConfig:
     def __post_init__(self):
         """Validate and set defaults"""
         # Validate algorithm
-        assert self.algorithm in ["ppo", "dpo"], \
-            f"algorithm must be 'ppo' or 'dpo', got '{self.algorithm}'"
+        assert self.algorithm in ["ppo", "dpo", "grpo"], \
+            f"algorithm must be 'ppo', 'dpo', or 'grpo', got '{self.algorithm}'"
 
         if self.datasets is None:
             # Default prompt dataset

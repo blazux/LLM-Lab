@@ -26,7 +26,7 @@ def print_menu():
     print("  1. Configure new model")
     print("  2. Base training")
     print("  3. SFT training (Supervised Fine-Tuning)")
-    print("  4. RLHF training (PPO/DPO)")
+    print("  4. RLHF training (PPO/DPO/GRPO)")
     print("  5. Test model (inference)")
     print("  6. Exit")
 
@@ -522,15 +522,15 @@ def configure_rlhf():
 
     # Algorithm selection
     print("\n🧠 Algorithm Selection")
-    print("Options: ppo, dpo")
+    print("Options: ppo, dpo, grpo")
     config.algorithm = get_input(
         "Algorithm",
         default=config.algorithm
     ).lower()
 
-    if config.algorithm not in ["ppo", "dpo"]:
+    if config.algorithm not in ["ppo", "dpo", "grpo"]:
         print(f"❌ Invalid algorithm: {config.algorithm}")
-        print("   Must be 'ppo' or 'dpo'")
+        print("   Must be 'ppo', 'dpo', or 'grpo'")
         return None
 
     # Policy checkpoint
@@ -551,6 +551,25 @@ def configure_rlhf():
         config.reward_model_name = get_input(
             "Reward model (HuggingFace)",
             default=config.reward_model_name
+        )
+    elif config.algorithm == "grpo":
+        # Reward model (for GRPO)
+        print("\n🎁 Reward Model")
+        config.reward_model_name = get_input(
+            "Reward model (HuggingFace)",
+            default=config.reward_model_name
+        )
+        # GRPO-specific parameters
+        print("\n🔢 GRPO Parameters")
+        config.group_size = get_input(
+            "Group size (number of responses per prompt)",
+            default=config.group_size,
+            type_fn=int
+        )
+        config.grpo_temperature = get_input(
+            "Generation temperature for GRPO",
+            default=config.grpo_temperature,
+            type_fn=float
         )
     elif config.algorithm == "dpo":
         # Reference model (only for DPO)
@@ -670,6 +689,10 @@ def start_rlhf_training():
 
     if config.algorithm == "ppo":
         print(f"  Reward model: {config.reward_model_name}")
+    elif config.algorithm == "grpo":
+        print(f"  Reward model: {config.reward_model_name}")
+        print(f"  Group size: {config.group_size}")
+        print(f"  GRPO temperature: {config.grpo_temperature}")
     elif config.algorithm == "dpo":
         ref_model = config.reference_checkpoint or config.policy_checkpoint
         print(f"  Reference model: {ref_model}")
