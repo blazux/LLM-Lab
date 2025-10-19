@@ -44,11 +44,13 @@ Once your architecture is defined, the config is saved in **Hugging Face format*
 Welcome to the world of gradient descent and existential doubt.
 
 ### Configure your training:
-- **Steps** → the more, the merrier (and slower).  
-- **Optimizer** → `AdamW`, `Adafactor`, `Lion`, `Sophia`, `Muon`.  
-- **Scheduler** → `None`, `Cosine`, `Linear decay`, `Polynomial decay`.  
-- **Hyperparams** → learning rate, batch size, gradient accumulation, clipping, etc.  
-- **Datasets** → any on HuggingFace. Multiple datasets are automatically interleaved for you (you’re welcome).
+- **Steps** → the more, the merrier (and slower).
+- **Optimizer** → `AdamW`, `Adafactor`, `Lion`, `Sophia`, `Muon`.
+  - Each optimizer has its own tunable parameters (betas, momentum, etc.) — the CLI will ask.
+- **Scheduler** → `None`, `Cosine`, `Linear decay`, `Polynomial decay`.
+- **Hyperparams** → learning rate, batch size, gradient accumulation, clipping, etc.
+- **Datasets** → any on HuggingFace. Multiple datasets are automatically interleaved for you (you're welcome).
+  - **Weights** are relative (e.g., `[1.0, 1.0]` = 50/50 split, `[2.0, 1.0]` = 66.7%/33.3%).
 
 Then, press *train* and watch numbers go down.  
 Or not.
@@ -68,6 +70,26 @@ SFT fine-tunes your pretrained model on **instruction / dialogue datasets** — 
 - **Datasets** → things like `HuggingFaceTB/smoltalk2`, `OpenAssistant/oasst1`, or any instruction dataset.
 
 The token counter resets. The suffering does not.
+
+### 🔧 LoRA (Low-Rank Adaptation)
+
+Don't have enough VRAM? **LoRA** lets you fine-tune efficiently by training small adapter matrices instead of the full model.
+
+- **Enable LoRA** → CLI will ask if you want it (default: no).
+- **Presets** → pick what to adapt:
+  - `minimal` → Q and V projections only (lightweight, often enough)
+  - `attention_only` → all attention projections (Q, K, V, O)
+  - `ffn_only` → feed-forward layers only (gate, up, down)
+  - `all` → everything that can be adapted
+  - `custom` → you choose which modules (for the bold)
+- **LoRA rank (r)** → bottleneck size (default: 8). Higher = more capacity, more VRAM.
+- **LoRA alpha** → scaling factor (default: 16). Usually set to `2 × r`.
+- **LoRA dropout** → regularization (default: 0.05).
+
+After training, you get **lightweight adapter files** instead of full checkpoints.
+Use the **"Merge LoRA adapters"** tool (CLI option 5) to bake them back into the base model for RLHF.
+
+You save VRAM. You might lose a tiny bit of performance. That's the trade-off.
 
 ---
 
@@ -125,6 +147,19 @@ GRPO compares each response to the **group average** — reinforcing what's rela
 
 Faster than PPO, no reference model needed like DPO, and surprisingly stable.
 Your mileage may vary, but at least it won't take forever.
+
+---
+
+### 🔧 LoRA for RLHF
+
+LoRA works for RLHF too — same concept, same trade-offs.
+
+- **Available for PPO, DPO, and GRPO** → same presets and settings as SFT.
+- **When to use it** → when your GPU is crying, or when you want faster iteration.
+- **Merging adapters** → if you trained SFT with LoRA, merge first before RLHF (unless you're doing RLHF with LoRA too).
+
+Training LoRA adapters during RLHF means only the adapter weights get updated by policy gradients.
+The base model stays frozen, which can be good or bad depending on your philosophical stance.
 
 ---
 
