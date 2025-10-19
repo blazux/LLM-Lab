@@ -52,8 +52,25 @@ class RLHFConfig:
     grpo_temperature: float = 1.0  # Generation temperature for GRPO groups
 
     # Optimizer
+    optimizer: str = "adamw"
     weight_decay: float = 0.0
     max_grad_norm: float = 1.0
+
+    # Optimizer-specific parameters
+    # AdamW
+    adamw_beta1: float = 0.9
+    adamw_beta2: float = 0.999
+    adamw_eps: float = 1e-8
+    # Muon
+    muon_momentum: float = 0.95
+    muon_nesterov: bool = True
+    # Lion
+    lion_beta1: float = 0.9
+    lion_beta2: float = 0.99
+    # Sophia
+    sophia_beta1: float = 0.965
+    sophia_beta2: float = 0.99
+    sophia_rho: float = 0.04
 
     # Logging & Checkpointing
     log_every: int = 10

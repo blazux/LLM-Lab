@@ -164,6 +164,9 @@ def setup_optimizer(model: nn.Module, config):
     """
     optimizer_name = config.optimizer.lower()
 
+    # Handle both 'lr' (TrainingConfig) and 'learning_rate' (SFTConfig/RLHFConfig)
+    lr = getattr(config, 'lr', None) or getattr(config, 'learning_rate', 3e-4)
+
     if optimizer_name == "muon":
         # Muon for 2D params, AdamW for rest
         muon_params = []
@@ -178,36 +181,48 @@ def setup_optimizer(model: nn.Module, config):
             else:
                 adamw_params.append(param)
 
-        muon_optimizer = Muon(muon_params, lr=config.lr, momentum=config.muon_momentum, nesterov=config.muon_nesterov)
-        adamw_optimizer = torch.optim.AdamW(adamw_params, lr=config.lr * 0.1, weight_decay=config.weight_decay)
+        muon_optimizer = Muon(muon_params, lr=lr, momentum=config.muon_momentum, nesterov=config.muon_nesterov)
+        adamw_optimizer = torch.optim.AdamW(adamw_params, lr=lr * 0.1, weight_decay=config.weight_decay)
 
         return [muon_optimizer, adamw_optimizer]
 
     elif optimizer_name == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=lr,
+            betas=(config.adamw_beta1, config.adamw_beta2),
+            eps=config.adamw_eps,
+            weight_decay=config.weight_decay
+        )
         return [optimizer]
 
     elif optimizer_name == "lion":
-        optimizer = Lion(model.parameters(), lr=config.lr, betas=(config.lion_beta1, config.lion_beta2), weight_decay=config.weight_decay)
+        optimizer = Lion(model.parameters(), lr=lr, betas=(config.lion_beta1, config.lion_beta2), weight_decay=config.weight_decay)
         return [optimizer]
 
     elif optimizer_name == "sophia":
-        optimizer = Sophia(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+        optimizer = Sophia(
+            model.parameters(),
+            lr=lr,
+            betas=(config.sophia_beta1, config.sophia_beta2),
+            rho=config.sophia_rho,
+            weight_decay=config.weight_decay
+        )
         return [optimizer]
 
     elif optimizer_name == "adafactor":
         try:
             from transformers.optimization import Adafactor
-            optimizer = Adafactor(model.parameters(), lr=config.lr, weight_decay=config.weight_decay, scale_parameter=False, relative_step=False)
+            optimizer = Adafactor(model.parameters(), lr=lr, weight_decay=config.weight_decay, scale_parameter=False, relative_step=False)
             return [optimizer]
         except ImportError:
             print("Adafactor requires transformers library. Falling back to AdamW.")
-            optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=config.weight_decay)
             return [optimizer]
 
     else:
         print(f"Unknown optimizer: {optimizer_name}. Falling back to AdamW.")
-        optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=config.weight_decay)
         return [optimizer]
 
 

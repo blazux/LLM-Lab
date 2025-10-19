@@ -15,6 +15,20 @@ from config import RLHFConfig
 from data import load_tokenizer
 
 
+def get_trend_indicator(current, previous):
+    """Get trend indicator arrow for metrics"""
+    if previous is None:
+        return ""
+    threshold = abs(previous * 0.001)
+    diff = current - previous
+    if abs(diff) < threshold:
+        return "→"
+    elif diff > 0:
+        return "↑"
+    else:
+        return "↓"
+
+
 def load_policy_model(checkpoint_path: str, device: torch.device, rlhf_config: Optional[RLHFConfig] = None):
     """Load policy model from checkpoint"""
     print(f"Loading policy model from {checkpoint_path}...")
@@ -413,11 +427,9 @@ def train_ppo(config: RLHFConfig):
     dataset = prepare_dataset(config, tokenizer)
 
     # Setup optimizer
-    optimizer = torch.optim.AdamW(
-        policy_model.parameters(),
-        lr=config.learning_rate,
-        weight_decay=config.weight_decay
-    )
+    from optimizers import setup_optimizer
+    optimizers = setup_optimizer(policy_model, config)
+    optimizer = optimizers[0]  # For RLHF, we always use single optimizer
 
     # Create output directory
     os.makedirs(config.output_dir, exist_ok=True)
@@ -429,6 +441,11 @@ def train_ppo(config: RLHFConfig):
 
     step = 0
     start_time = time.time()
+
+    # Track previous metrics for trend indicators
+    prev_reward = None
+    prev_policy_loss = None
+    prev_entropy = None
 
     # Iterate through dataset
     dataset_iter = iter(dataset)
@@ -525,11 +542,22 @@ def train_ppo(config: RLHFConfig):
                 eta_seconds = remaining_steps / steps_per_sec if steps_per_sec > 0 else 0
                 eta_minutes = eta_seconds / 60
 
+                # Get trend indicators
+                mean_reward = rewards.mean().item()
+                reward_trend = get_trend_indicator(mean_reward, prev_reward)
+                policy_loss_trend = get_trend_indicator(policy_loss, prev_policy_loss)
+                entropy_trend = get_trend_indicator(entropy, prev_entropy)
+
                 print(f"Step {step}/{config.max_steps} | "
-                      f"Reward: {rewards.mean().item():.4f} ± {rewards.std().item():.4f} | "
-                      f"Policy Loss: {policy_loss:.4f} | "
-                      f"Entropy: {entropy:.4f} | "
+                      f"Reward {mean_reward:.4f} {reward_trend} ± {rewards.std().item():.4f} | "
+                      f"Policy Loss {policy_loss:.4f} {policy_loss_trend} | "
+                      f"Entropy {entropy:.4f} {entropy_trend} | "
                       f"ETA: {eta_minutes:.1f}m")
+
+                # Update previous values
+                prev_reward = mean_reward
+                prev_policy_loss = policy_loss
+                prev_entropy = entropy
 
             # Save checkpoint
             if step % config.save_every == 0:

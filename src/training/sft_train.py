@@ -14,6 +14,20 @@ from data import load_tokenizer, create_sft_dataset, sft_collate_fn
 from optimizers import setup_optimizer
 
 
+def get_trend_indicator(current, previous):
+    """Get trend indicator arrow for metrics"""
+    if previous is None:
+        return ""
+    threshold = abs(previous * 0.001)
+    diff = current - previous
+    if abs(diff) < threshold:
+        return "→"
+    elif diff > 0:
+        return "↑"
+    else:
+        return "↓"
+
+
 def evaluate_sft_model(model: nn.Module, val_loader: DataLoader, max_eval_steps: int):
     """Evaluate model on SFT validation set"""
     model.eval()
@@ -328,6 +342,10 @@ def train_sft(config: SFTConfig):
     start_step = 0
     best_val_loss = float('inf')
 
+    # Track previous metrics for trend indicators
+    prev_val_loss = None
+    prev_val_acc = None
+
     # Training loop
     print(f"\n🚀 Starting SFT training...")
     model.train()
@@ -395,9 +413,23 @@ def train_sft(config: SFTConfig):
         # Evaluation
         if step % config.eval_every == 0 and step > 0:
             eval_metrics = evaluate_sft_model(model, val_loader, config.eval_steps)
-            print(f"\n   Step {step}: Val Loss={eval_metrics['val_loss']:.4f}, "
-                  f"Val Acc={eval_metrics['val_accuracy']:.4f}, "
-                  f"Val PPL={eval_metrics['val_perplexity']:.2f}")
+
+            # Get trend indicators
+            val_loss_trend = get_trend_indicator(eval_metrics['val_loss'], prev_val_loss)
+            val_acc_trend = get_trend_indicator(eval_metrics['val_accuracy'], prev_val_acc)
+
+            # Mark if this is the best val loss
+            is_best = eval_metrics['val_loss'] < best_val_loss
+            best_marker = "★" if is_best else ""
+
+            print(f"\n   Step {step}/{config.max_steps} | "
+                  f"Val Loss {eval_metrics['val_loss']:.4f} {val_loss_trend}{best_marker} | "
+                  f"Val Acc {eval_metrics['val_accuracy']:.1%} {val_acc_trend} | "
+                  f"Val PPL {eval_metrics['val_perplexity']:.1f}")
+
+            # Update previous values
+            prev_val_loss = eval_metrics['val_loss']
+            prev_val_acc = eval_metrics['val_accuracy']
 
             # Save checkpoint if best
             if eval_metrics['val_loss'] < best_val_loss:
@@ -407,7 +439,6 @@ def train_sft(config: SFTConfig):
                     # For LoRA training: only save adapters (base model is frozen)
                     adapter_dir = f"{config.output_dir}/best_lora_adapters"
                     model.save_pretrained(adapter_dir)
-                    print(f"   💾 Saved best LoRA adapters (val_loss={best_val_loss:.4f})")
 
                     # Save minimal metadata separately
                     import json
@@ -419,6 +450,9 @@ def train_sft(config: SFTConfig):
                     }
                     with open(f"{config.output_dir}/best_lora_adapters/training_metadata.json", 'w') as f:
                         json.dump(metadata, f, indent=2, default=str)
+
+                    print(f"\n   ✨ New best validation loss: {best_val_loss:.4f}")
+                    print(f"   💾 Best LoRA adapters saved: {config.output_dir}/best_lora_adapters")
                 else:
                     # For full fine-tuning: save complete checkpoint
                     checkpoint_data = {
@@ -433,7 +467,9 @@ def train_sft(config: SFTConfig):
                     }
 
                     torch.save(checkpoint_data, f"{config.output_dir}/best_model.pt")
-                    print(f"   💾 Saved best SFT model (val_loss={best_val_loss:.4f})")
+
+                    print(f"\n   ✨ New best validation loss: {best_val_loss:.4f}")
+                    print(f"   💾 Best model saved: {config.output_dir}/best_model.pt")
 
             # Save checkpoint periodically
             if not config.save_best_only and step % config.save_every == 0:

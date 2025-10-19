@@ -14,6 +14,30 @@ from optimizers import setup_optimizer
 from data import StreamingTokenDataset, lm_collate_fn, load_tokenizer, create_token_stream
 
 
+def get_trend_indicator(current, previous):
+    """Get trend indicator arrow for metrics
+
+    Args:
+        current: Current value
+        previous: Previous value
+
+    Returns:
+        Arrow character (↑/↓/→)
+    """
+    if previous is None:
+        return ""
+
+    threshold = abs(previous * 0.001)  # 0.1% threshold for "no change"
+    diff = current - previous
+
+    if abs(diff) < threshold:
+        return "→"
+    elif diff > 0:
+        return "↑"
+    else:
+        return "↓"
+
+
 def evaluate_model(model: nn.Module, val_loader: DataLoader, config: TrainingConfig, vocab_size: int):
     """Evaluate model on validation set"""
     model.eval()
@@ -216,6 +240,12 @@ def train_model(
     step = start_step
     start_time = time.time()
 
+    # Track previous metrics for trend indicators
+    prev_loss = None
+    prev_acc = None
+    prev_val_loss = None
+    prev_val_acc = None
+
     pbar = tqdm(total=target_steps, desc="Training", initial=step)
 
     while step < target_steps:
@@ -272,9 +302,23 @@ def train_model(
             # Evaluation
             if step % train_config.eval_every == 0 and step > 0:
                 eval_metrics = evaluate_model(model, val_loader, train_config, model_config.vocab_size)
-                print(f"\n   Step {step}: Val Loss={eval_metrics['val_loss']:.4f}, "
-                      f"Val Acc={eval_metrics['val_accuracy']:.4f}, "
-                      f"Val PPL={eval_metrics['val_perplexity']:.2f}")
+
+                # Get trend indicators
+                val_loss_trend = get_trend_indicator(eval_metrics['val_loss'], prev_val_loss)
+                val_acc_trend = get_trend_indicator(eval_metrics['val_accuracy'], prev_val_acc)
+
+                # Mark if this is the best val loss
+                is_best = eval_metrics['val_loss'] < best_val_loss
+                best_marker = "★" if is_best else ""
+
+                print(f"\n   Step {step}/{target_steps} | "
+                      f"Val Loss {eval_metrics['val_loss']:.4f} {val_loss_trend}{best_marker} | "
+                      f"Val Acc {eval_metrics['val_accuracy']:.1%} {val_acc_trend} | "
+                      f"Val PPL {eval_metrics['val_perplexity']:.1f}")
+
+                # Update previous values
+                prev_val_loss = eval_metrics['val_loss']
+                prev_val_acc = eval_metrics['val_accuracy']
 
                 # Save checkpoint if best
                 if eval_metrics['val_loss'] < best_val_loss:
@@ -293,7 +337,9 @@ def train_model(
                     }
 
                     torch.save(checkpoint_data, f"{output_dir}/best_model.pt")
-                    print(f"   💾 Saved best model (val_loss={best_val_loss:.4f})")
+
+                    print(f"\n   ✨ New best validation loss: {best_val_loss:.4f}")
+                    print(f"   💾 Best model saved: {output_dir}/best_model.pt")
 
                 # Always save latest checkpoint
                 if not train_config.save_best_only:

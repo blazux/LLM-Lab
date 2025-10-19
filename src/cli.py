@@ -15,21 +15,24 @@ from data import list_dataset_splits
 
 def print_header():
     """Print CLI header"""
-    print("\n" + "=" * 60)
-    print(" " * 15 + "🧠 LLM-Laboratory")
-    print("=" * 60)
+    print("\n" + "╔" + "═" * 60 + "╗")
+    print("║" + " " * 18 + "🧠 LLM-Laboratory" + " " * 24 + "║")
+    print("╚" + "═" * 60 + "╝")
 
 
 def print_menu():
     """Print main menu"""
-    print("\nMain Menu:")
-    print("  1. Configure new model")
-    print("  2. Base training")
-    print("  3. SFT training (Supervised Fine-Tuning)")
-    print("  4. RLHF training (PPO/DPO/GRPO)")
-    print("  5. Merge LoRA adapters")
-    print("  6. Test model (inference)")
-    print("  7. Exit")
+    print("\nMain Menu:\n")
+    print("  MODEL SETUP")
+    print("    1. ⚙️  Configure new model\n")
+    print("  TRAINING PIPELINE")
+    print("    2. 🎯 Base training (from scratch)")
+    print("    3. 🎓 SFT training (instruction tuning)")
+    print("    4. 🧠 RLHF training (alignment)\n")
+    print("  TOOLS")
+    print("    5. 🔀 Merge LoRA adapters")
+    print("    6. 💬 Test model (inference)")
+    print("    7. 👋 Exit")
 
 
 def get_input(prompt: str, default=None, type_fn=str):
@@ -142,6 +145,27 @@ def configure_training():
     train_config.optimizer = get_input("Optimizer", default=train_config.optimizer)
     train_config.lr = get_input("Learning rate", default=train_config.lr, type_fn=float)
     train_config.weight_decay = get_input("Weight decay", default=train_config.weight_decay, type_fn=float)
+
+    # Optimizer-specific parameters
+    if train_config.optimizer.lower() == "adamw":
+        print(f"\n   AdamW-specific parameters")
+        train_config.adamw_beta1 = get_input("   Beta1", default=train_config.adamw_beta1, type_fn=float)
+        train_config.adamw_beta2 = get_input("   Beta2", default=train_config.adamw_beta2, type_fn=float)
+        train_config.adamw_eps = get_input("   Epsilon", default=train_config.adamw_eps, type_fn=float)
+    elif train_config.optimizer.lower() == "muon":
+        print(f"\n   Muon-specific parameters")
+        train_config.muon_momentum = get_input("   Momentum", default=train_config.muon_momentum, type_fn=float)
+        nesterov_input = get_input("   Use Nesterov? [y/n]", default="y" if train_config.muon_nesterov else "n")
+        train_config.muon_nesterov = nesterov_input.lower() in ['y', 'yes']
+    elif train_config.optimizer.lower() == "lion":
+        print(f"\n   Lion-specific parameters")
+        train_config.lion_beta1 = get_input("   Beta1", default=train_config.lion_beta1, type_fn=float)
+        train_config.lion_beta2 = get_input("   Beta2", default=train_config.lion_beta2, type_fn=float)
+    elif train_config.optimizer.lower() == "sophia":
+        print(f"\n   Sophia-specific parameters")
+        train_config.sophia_beta1 = get_input("   Beta1", default=train_config.sophia_beta1, type_fn=float)
+        train_config.sophia_beta2 = get_input("   Beta2", default=train_config.sophia_beta2, type_fn=float)
+        train_config.sophia_rho = get_input("   Rho (clipping)", default=train_config.sophia_rho, type_fn=float)
 
     # Scheduler
     print(f"\n📈 Learning Rate Scheduler")
@@ -302,6 +326,16 @@ def start_training():
         print("Base training cancelled.")
         return
 
+    # Update training_config.json with new max_steps if additional steps were added
+    if additional_steps > 0 and choice == "1":
+        import torch
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        current_step = ckpt.get('step', 0)
+        new_max_steps = current_step + additional_steps
+        train_config.max_steps = new_max_steps
+        train_config.save(train_config_path)
+        print(f"✓ Updated {train_config_path} with new max_steps: {new_max_steps}")
+
     # Start base training
     try:
         train_model(model_config, train_config, checkpoint_path, output_dir, additional_steps, load_optimizer_state)
@@ -347,6 +381,27 @@ def configure_sft():
     config.optimizer = get_input("Optimizer", default=config.optimizer)
     config.learning_rate = get_input("Learning rate", default=config.learning_rate, type_fn=float)
     config.weight_decay = get_input("Weight decay", default=config.weight_decay, type_fn=float)
+
+    # Optimizer-specific parameters
+    if config.optimizer.lower() == "adamw":
+        print(f"\n   AdamW-specific parameters")
+        config.adamw_beta1 = get_input("   Beta1", default=config.adamw_beta1, type_fn=float)
+        config.adamw_beta2 = get_input("   Beta2", default=config.adamw_beta2, type_fn=float)
+        config.adamw_eps = get_input("   Epsilon", default=config.adamw_eps, type_fn=float)
+    elif config.optimizer.lower() == "muon":
+        print(f"\n   Muon-specific parameters")
+        config.muon_momentum = get_input("   Momentum", default=config.muon_momentum, type_fn=float)
+        nesterov_input = get_input("   Use Nesterov? [y/n]", default="y" if config.muon_nesterov else "n")
+        config.muon_nesterov = nesterov_input.lower() in ['y', 'yes']
+    elif config.optimizer.lower() == "lion":
+        print(f"\n   Lion-specific parameters")
+        config.lion_beta1 = get_input("   Beta1", default=config.lion_beta1, type_fn=float)
+        config.lion_beta2 = get_input("   Beta2", default=config.lion_beta2, type_fn=float)
+    elif config.optimizer.lower() == "sophia":
+        print(f"\n   Sophia-specific parameters")
+        config.sophia_beta1 = get_input("   Beta1", default=config.sophia_beta1, type_fn=float)
+        config.sophia_beta2 = get_input("   Beta2", default=config.sophia_beta2, type_fn=float)
+        config.sophia_rho = get_input("   Rho (clipping)", default=config.sophia_rho, type_fn=float)
 
     # Scheduler
     print(f"\n📈 Learning Rate Scheduler")
@@ -870,7 +925,33 @@ def configure_rlhf():
     if config.algorithm == "ppo":
         config.ppo_epochs = get_input("PPO epochs per batch", default=config.ppo_epochs, type_fn=int)
 
+    # Optimizer
+    print(f"\n🔧 Optimizer")
+    print(f"Options: {', '.join(OPTIMIZER_NAMES)}")
+    config.optimizer = get_input("Optimizer", default=config.optimizer)
     config.learning_rate = get_input("Learning rate", default=config.learning_rate, type_fn=float)
+    config.weight_decay = get_input("Weight decay", default=config.weight_decay, type_fn=float)
+
+    # Optimizer-specific parameters
+    if config.optimizer.lower() == "adamw":
+        print(f"\n   AdamW-specific parameters")
+        config.adamw_beta1 = get_input("   Beta1", default=config.adamw_beta1, type_fn=float)
+        config.adamw_beta2 = get_input("   Beta2", default=config.adamw_beta2, type_fn=float)
+        config.adamw_eps = get_input("   Epsilon", default=config.adamw_eps, type_fn=float)
+    elif config.optimizer.lower() == "muon":
+        print(f"\n   Muon-specific parameters")
+        config.muon_momentum = get_input("   Momentum", default=config.muon_momentum, type_fn=float)
+        nesterov_input = get_input("   Use Nesterov? [y/n]", default="y" if config.muon_nesterov else "n")
+        config.muon_nesterov = nesterov_input.lower() in ['y', 'yes']
+    elif config.optimizer.lower() == "lion":
+        print(f"\n   Lion-specific parameters")
+        config.lion_beta1 = get_input("   Beta1", default=config.lion_beta1, type_fn=float)
+        config.lion_beta2 = get_input("   Beta2", default=config.lion_beta2, type_fn=float)
+    elif config.optimizer.lower() == "sophia":
+        print(f"\n   Sophia-specific parameters")
+        config.sophia_beta1 = get_input("   Beta1", default=config.sophia_beta1, type_fn=float)
+        config.sophia_beta2 = get_input("   Beta2", default=config.sophia_beta2, type_fn=float)
+        config.sophia_rho = get_input("   Rho (clipping)", default=config.sophia_rho, type_fn=float)
 
     if config.algorithm == "ppo":
         config.clip_range = get_input("Clip range (epsilon)", default=config.clip_range, type_fn=float)

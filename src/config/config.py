@@ -108,10 +108,20 @@ class TrainingConfig:
     weight_decay: float = 0.1
 
     # Optimizer-specific parameters
+    # AdamW
+    adamw_beta1: float = 0.9
+    adamw_beta2: float = 0.999
+    adamw_eps: float = 1e-8
+    # Muon
     muon_momentum: float = 0.95
     muon_nesterov: bool = True
+    # Lion
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
+    # Sophia
+    sophia_beta1: float = 0.965
+    sophia_beta2: float = 0.99
+    sophia_rho: float = 0.04
 
     # Scheduler
     scheduler: str = "cosine"
