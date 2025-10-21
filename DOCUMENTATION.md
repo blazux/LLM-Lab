@@ -10,13 +10,16 @@ This document provides a comprehensive guide to training Large Language Models u
 2. [Model Configuration](#model-configuration)
 3. [Base Training (Pretraining)](#base-training-pretraining)
 4. [Supervised Fine-Tuning (SFT)](#supervised-fine-tuning-sft)
+   - [LoRA for SFT](#lora-for-sft)
 5. [RLHF Training](#rlhf-training)
    - [PPO (Proximal Policy Optimization)](#ppo-proximal-policy-optimization)
    - [DPO (Direct Preference Optimization)](#dpo-direct-preference-optimization)
    - [GRPO (Group Relative Policy Optimization)](#grpo-group-relative-policy-optimization)
+   - [LoRA for RLHF](#lora-for-rlhf)
 6. [Model Inference and Testing](#model-inference-and-testing)
-7. [Best Practices and Tips](#best-practices-and-tips)
-8. [Troubleshooting](#troubleshooting)
+7. [LoRA Adapter Merging](#lora-adapter-merging)
+8. [Best Practices and Tips](#best-practices-and-tips)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -267,17 +270,33 @@ You can either:
 - **What each does:**
   - **`adamw`**: Adam with decoupled weight decay, proven and reliable
     - Best for: Most use cases, well-understood hyperparameters
+    - **Parameters:**
+      - `adamw_beta1` (default: 0.9) - Exponential decay rate for first moment
+      - `adamw_beta2` (default: 0.999) - Exponential decay rate for second moment
+      - `adamw_eps` (default: 1e-8) - Small constant for numerical stability
   - **`adafactor`**: Memory-efficient alternative to Adam
     - Best for: Large models with limited VRAM
+    - **Parameters:** No additional parameters (uses defaults from transformers library)
   - **`lion`**: Newer optimizer, often faster convergence with less memory
     - Best for: Experimental, when you want faster training
-    - Parameters: `lion_beta1` (default 0.9), `lion_beta2` (default 0.99)
-  - **`sophia`**: Second-order optimizer, better than Adam in some cases
+    - **Parameters:**
+      - `lion_beta1` (default: 0.9) - Momentum for EMA of gradients
+      - `lion_beta2` (default: 0.99) - Momentum for update direction
+  - **`sophia`**: Second-order optimizer using Hessian information
     - Best for: When you have compute budget for better optimization
-  - **`muon`**: Momentum-based optimizer with Nesterov acceleration
+    - **Parameters:**
+      - `sophia_beta1` (default: 0.965) - Momentum for first moment
+      - `sophia_beta2` (default: 0.99) - Momentum for Hessian diagonal estimate
+      - `sophia_rho` (default: 0.04) - Clipping threshold for updates
+  - **`muon`**: Momentum-based optimizer with orthogonalization via Newton-Schulz iteration
     - Best for: Alternative to AdamW with different convergence properties
-    - Parameters: `muon_momentum` (default 0.95), `muon_nesterov` (default True)
+    - **Parameters:**
+      - `muon_momentum` (default: 0.95) - Momentum coefficient
+      - `muon_nesterov` (default: True) - Use Nesterov momentum
+    - **Note:** Muon applies to 2D parameters; 1D parameters use AdamW with 0.1x learning rate
 - **Recommendation:** Start with `adamw`, experiment with others if needed
+
+**Important:** The CLI will only prompt for parameters relevant to your selected optimizer. All parameters can also be manually edited in the configuration JSON file.
 
 #### **Learning Rate (`lr`)**
 - **Type:** Float
@@ -379,8 +398,20 @@ HuggingFaceFW/fineweb-2 | eng_Latn | 2.0
 ```
 
 **Multiple datasets:** Automatically interleaved based on weights
+- Weights are **relative**, not absolute percentages
 - Higher weight = sampled more frequently
 - Useful for balancing languages or domains
+
+**Weight Examples:**
+- `[1.0, 1.0]` = 50/50 split between two datasets
+- `[2.0, 1.0]` = 66.7% first dataset, 33.3% second dataset
+- `[3.0, 1.0]` = 75% first dataset, 25% second dataset
+- If weight is omitted, it defaults to 1.0
+
+**How it works:**
+1. All weights are summed (e.g., [2.0, 1.0] → total = 3.0)
+2. Each weight is divided by the total to get probability (e.g., 2.0/3.0 = 0.667, 1.0/3.0 = 0.333)
+3. Datasets are sampled according to these probabilities during training
 
 **Default dataset:** `HuggingFaceFW/fineweb-edu` (high-quality educational content)
 
@@ -465,6 +496,9 @@ From the CLI, select option 3: "SFT training (Supervised Fine-Tuning)"
 #### **Optimizer (`optimizer`)**
 - **Options:** Same as base training (`adamw`, `muon`, `lion`, `sophia`, `adafactor`)
 - **Default:** `adamw`
+- **Parameters:** See [Base Training Optimizer Parameters](#optimizer-optimizer) for details on each optimizer's specific parameters
+  - The CLI will prompt for parameters relevant to your chosen optimizer
+  - All parameters can be manually edited in `sft_config.json`
 - **Recommendation:** AdamW works well for SFT
 
 #### **Scheduler (`scheduler`)**
@@ -534,6 +568,104 @@ SFT datasets must have instruction-response pairs. Common formats:
 3. **Don't overtrain** - 5,000-10,000 steps is often enough
 4. **Monitor validation loss** - Stop when it starts increasing (overfitting)
 5. **Test your model** - Try inference frequently to ensure quality
+
+---
+
+### LoRA for SFT
+
+**LoRA (Low-Rank Adaptation)** is a parameter-efficient fine-tuning technique that reduces memory requirements and speeds up training by only training small adapter matrices instead of the full model.
+
+#### **When to Use LoRA**
+
+- You have limited VRAM (can't fit full model + optimizer states)
+- You want faster iteration cycles
+- You want to create multiple task-specific adapters from the same base model
+- You need to save disk space (adapters are much smaller than full checkpoints)
+
+#### **LoRA Parameters**
+
+**Enable LoRA (`use_lora`)**
+- **Type:** Boolean
+- **Default:** `False`
+- **What it does:** Enables LoRA training instead of full fine-tuning
+- **Note:** CLI will prompt for this option
+
+**LoRA Preset (`lora_preset`)**
+- **Options:** `minimal`, `attention_only`, `ffn_only`, `all`, `custom`
+- **Default:** `minimal`
+- **What each does:**
+  - **`minimal`**: Q and V projections only
+    - Lightest option, often sufficient for many tasks
+    - ~5-10% of full model parameters
+  - **`attention_only`**: All attention projections (Q, K, V, output)
+    - More comprehensive attention adaptation
+    - ~10-20% of full model parameters
+  - **`ffn_only`**: Feed-forward layers only (gate, up, down projections)
+    - Good for task-specific knowledge
+    - ~15-30% of full model parameters
+  - **`all`**: Both attention and feed-forward layers
+    - Maximum adaptation capability
+    - ~25-40% of full model parameters
+  - **`custom`**: Manually specify target modules
+    - For advanced users who know exactly what to adapt
+    - Specify module names (e.g., `["q_proj", "v_proj", "gate_proj"]`)
+
+**LoRA Rank (`lora_r`)**
+- **Type:** Integer
+- **Default:** `8`
+- **What it does:** Rank of the low-rank decomposition (size of adapter bottleneck)
+- **Typical values:** 4-64
+- **Impact:**
+  - Lower (4-8): Less memory, faster, may limit adaptation capability
+  - Medium (8-16): Good balance for most tasks
+  - Higher (32-64): More expressive, closer to full fine-tuning quality
+- **Recommendation:** Start with 8, increase if quality is insufficient
+
+**LoRA Alpha (`lora_alpha`)**
+- **Type:** Integer
+- **Default:** `16`
+- **What it does:** Scaling factor for LoRA updates
+- **Typical values:** 8-32
+- **Relationship:** Usually set to `2 × lora_r`
+- **Impact:** Higher alpha = stronger LoRA influence
+- **Recommendation:** Use `2 × lora_r` as default (e.g., r=8 → alpha=16)
+
+**LoRA Dropout (`lora_dropout`)**
+- **Type:** Float (0.0-1.0)
+- **Default:** `0.05`
+- **What it does:** Dropout applied to LoRA adapters for regularization
+- **Typical values:** 0.0-0.1
+- **Recommendation:** 0.05 is good default, use 0.0 for larger datasets
+
+**LoRA Target Modules (`lora_target_modules`)** *(custom preset only)*
+- **Type:** List of strings
+- **Default:** `None`
+- **What it does:** Manually specify which modules to apply LoRA to
+- **Example:** `["q_proj", "v_proj", "gate_proj", "up_proj"]`
+- **Note:** Only used when `lora_preset="custom"`
+
+#### **LoRA Output**
+
+When training with LoRA:
+- **Full checkpoints** still contain base model + adapters (for resuming training)
+- **Lightweight adapters** saved separately in `{output_dir}/best_lora_adapters/`
+  - These are ~10-100MB instead of multiple GB
+  - Can be loaded with PEFT/HuggingFace libraries
+  - Can be merged back into base model using CLI tool
+
+#### **LoRA Training Tips**
+
+1. **Memory savings:** LoRA uses 30-60% less VRAM than full fine-tuning
+2. **Quality trade-off:** Typically 95-99% of full fine-tuning quality
+3. **Start minimal:** Try `minimal` preset first, increase if needed
+4. **Learning rate:** Can use slightly higher LR than full fine-tuning (e.g., 1e-5 instead of 5e-6)
+5. **Multiple adapters:** Train different adapters for different tasks from same base
+
+#### **When NOT to Use LoRA**
+
+- You have plenty of VRAM and want maximum quality
+- You're doing extensive domain adaptation (full fine-tuning may be better)
+- You're training the base model from scratch (LoRA is for fine-tuning only)
 
 ---
 
@@ -787,9 +919,90 @@ GRPO is a newer approach that generates multiple responses per prompt and learns
 
 ---
 
+### LoRA for RLHF
+
+LoRA can be used with any RLHF algorithm (PPO, DPO, or GRPO) to reduce memory requirements during reinforcement learning.
+
+#### **When to Use LoRA in RLHF**
+
+- Limited VRAM for policy optimization
+- Want to experiment with different reward signals without full model training
+- Creating multiple aligned variants from the same SFT model
+- Faster iteration during RLHF experimentation
+
+#### **LoRA Parameters for RLHF**
+
+All LoRA parameters are identical to SFT (see [LoRA for SFT](#lora-for-sft)):
+- `use_lora`: Enable LoRA (default: False)
+- `lora_preset`: Which modules to adapt (default: "minimal")
+- `lora_r`: Rank of adapters (default: 8)
+- `lora_alpha`: Scaling factor (default: 16)
+- `lora_dropout`: Regularization dropout (default: 0.05)
+- `lora_target_modules`: Custom module list (if preset="custom")
+
+#### **LoRA RLHF Workflow**
+
+**Scenario 1: SFT with LoRA → RLHF with LoRA**
+1. Train SFT with LoRA adapters
+2. Continue RLHF with same LoRA configuration
+3. Adapters are updated by policy gradients
+4. Base model stays frozen throughout
+
+**Scenario 2: SFT with LoRA → Merge → RLHF without LoRA**
+1. Train SFT with LoRA adapters
+2. Merge adapters into base model (CLI option 5)
+3. Run RLHF on merged model (full fine-tuning)
+4. Recommended if you have VRAM for RLHF
+
+**Scenario 3: Full SFT → RLHF with LoRA**
+1. Train SFT without LoRA (full model)
+2. Run RLHF with LoRA to save memory
+3. Only policy updates are through adapters
+4. Good for memory-constrained RLHF
+
+#### **Important Considerations**
+
+**Policy Gradients with LoRA:**
+- Only adapter parameters receive policy gradient updates
+- Base model remains frozen during RLHF
+- This can be beneficial (preserves SFT quality) or limiting (less flexibility)
+
+**Reference Model (DPO only):**
+- When using LoRA with DPO, the reference model is automatically the frozen base
+- The policy model = base + adapters
+- This naturally provides the reference vs. policy comparison DPO needs
+
+**Reward Model (PPO/GRPO):**
+- Reward model is always separate and frozen
+- LoRA on policy doesn't affect reward model
+
+#### **LoRA RLHF Training Tips**
+
+1. **Rank selection:** RLHF may benefit from slightly higher rank (16-32) than SFT
+2. **Preset choice:** `all` preset often works better for RLHF than minimal
+3. **Learning rate:** Can use higher LR with LoRA since only adapters are updated
+4. **Merging:** If training SFT with LoRA for RLHF later, test both merged and unmerged
+5. **Quality:** LoRA RLHF typically achieves 90-95% of full RLHF quality
+
+#### **When NOT to Use LoRA in RLHF**
+
+- You have sufficient VRAM for full model RLHF
+- You need maximum alignment quality
+- You're doing extensive reward optimization (full model may converge better)
+
+---
+
 ### Common RLHF Parameters
 
 These apply to all three RLHF algorithms:
+
+**Optimizer (`optimizer`)**
+- **Options:** Same as base training and SFT (`adamw`, `muon`, `lion`, `sophia`, `adafactor`)
+- **Default:** `adamw`
+- **Parameters:** See [Base Training Optimizer Parameters](#optimizer-optimizer) for details on each optimizer's specific parameters
+  - The CLI will prompt for parameters relevant to your chosen optimizer
+  - All parameters can be manually edited in `rlhf_config.json`
+- **Note:** Optimizer selection was added in recent version; older configs may not have this field
 
 **Learning Rate (`learning_rate`)**
 - **Default:** `1.4e-5`
@@ -866,6 +1079,113 @@ The inference system uses:
 
 ---
 
+## LoRA Adapter Merging
+
+If you've trained with LoRA, you'll want to merge the adapters back into the base model for deployment or further training without LoRA.
+
+### When to Merge LoRA Adapters
+
+- **Before RLHF:** If you did SFT with LoRA but want full RLHF (not LoRA RLHF)
+- **For deployment:** To create a single model file instead of base + adapters
+- **For inference:** Merged models can be slightly faster for inference
+- **For compatibility:** Some deployment frameworks work better with merged models
+
+### Running Merge Tool
+
+From the CLI, select option 5: "Merge LoRA adapters"
+
+### Input Options
+
+**Option 1: Adapter Folder (Recommended)**
+- **Input:** Path to lightweight LoRA adapter folder (e.g., `sft_checkpoints/best_lora_adapters/`)
+- **Base model:** Path to original base model checkpoint
+- **What happens:**
+  1. Loads base model weights
+  2. Loads LoRA adapters from folder
+  3. Merges adapters into base model weights
+  4. Saves merged checkpoint
+
+**Option 2: Full Checkpoint**
+- **Input:** Path to full checkpoint containing base + adapters (e.g., `sft_checkpoints/best_model.pt`)
+- **What happens:**
+  1. Loads full checkpoint
+  2. Detects LoRA parameters
+  3. Merges adapters into base weights
+  4. Saves merged checkpoint
+
+### Merge Process
+
+The merge process:
+1. **Loads base model** - Creates the base transformer model
+2. **Loads LoRA adapters** - Either from adapter folder or full checkpoint
+3. **Merges weights** - Mathematically combines base weights with LoRA updates
+   - Formula: `W_merged = W_base + (LoRA_A × LoRA_B) × (alpha/r)`
+4. **Saves merged model** - Checkpoint with merged weights (no LoRA parameters)
+
+### Output
+
+**Merged checkpoint contains:**
+- Merged model weights (base + adapters combined)
+- Model configuration
+- Training metadata (step count, metrics, etc.)
+
+**What's removed:**
+- LoRA-specific parameters (lora_A, lora_B matrices)
+- LoRA configuration
+- Adapter-specific metadata
+
+**File size:**
+- Same as base model (LoRA adapters are merged, not added)
+- Can delete adapter files after merging if desired
+
+### Using Merged Models
+
+**For RLHF:**
+```
+1. Train SFT with LoRA → sft_checkpoints/best_model.pt
+2. Merge adapters → sft_checkpoints/best_model_merged.pt
+3. Use merged checkpoint for RLHF training
+```
+
+**For deployment:**
+```
+1. Train SFT/RLHF with LoRA → checkpoints/best_model.pt
+2. Merge adapters → checkpoints/best_model_merged.pt
+3. Deploy merged checkpoint (no adapter loading needed)
+```
+
+**For inference:**
+```
+1. Merge adapters → model_merged.pt
+2. Use CLI inference tool with merged checkpoint
+3. Slightly faster than loading base + adapters separately
+```
+
+### Important Notes
+
+1. **Irreversible:** Merging cannot be undone - keep original adapters if you might need them
+2. **Same quality:** Merged model has identical quality to base + adapters
+3. **No training needed:** Merge is a mathematical operation, not training
+4. **Checkpoint size:** Merged checkpoint is same size as base model
+5. **Multiple adapters:** Can't merge multiple adapters into one model (they'd interfere)
+
+### Troubleshooting Merge
+
+**"Checkpoint doesn't have LoRA parameters"**
+- You're trying to merge a model that wasn't trained with LoRA
+- Or the checkpoint is already merged
+- Solution: Check if you actually used LoRA during training
+
+**"Could not load LoRA config"**
+- Checkpoint missing SFTConfig or RLHFConfig metadata
+- Solution: Use Option 1 (adapter folder) instead
+
+**"Adapter folder not found"**
+- Path is incorrect or adapters weren't saved
+- Solution: Check that LoRA training completed and saved adapters
+
+---
+
 ## Best Practices and Tips
 
 ### General Training
@@ -908,6 +1228,7 @@ The inference system uses:
 - Use diverse, high-quality data
 - `fineweb-edu` is excellent for education-focused models
 - Mix domains for general models
+- Dataset weights are relative: `[2.0, 1.0]` = 66.7%/33.3% split
 
 **SFT:**
 - Quality > quantity
@@ -917,6 +1238,39 @@ The inference system uses:
 **RLHF:**
 - For PPO/GRPO: Simple prompts work fine
 - For DPO: Quality of preferences is critical
+
+### LoRA Usage
+
+**When to use LoRA:**
+- Limited VRAM (saves 30-60% memory)
+- Fast iteration (smaller checkpoints)
+- Multiple task variants from same base
+
+**LoRA best practices:**
+1. **Start minimal:** Use `minimal` preset first, increase if quality insufficient
+2. **Rank selection:** 8 for SFT, 16-32 for RLHF
+3. **Alpha = 2×rank:** Standard scaling (e.g., r=8 → alpha=16)
+4. **Learning rate:** Can be slightly higher than full fine-tuning
+5. **Merge for RLHF:** If doing SFT with LoRA → RLHF without LoRA, merge first
+
+**LoRA quality expectations:**
+- SFT with LoRA: 95-99% of full fine-tuning quality
+- RLHF with LoRA: 90-95% of full RLHF quality
+- Higher rank → closer to full quality
+
+### Optimizer Selection
+
+**By use case:**
+- **General purpose:** AdamW (reliable, well-tested)
+- **Memory constrained:** Adafactor or Lion
+- **Experimental:** Muon or Sophia
+- **Fastest convergence:** Lion (often)
+
+**Parameters to tune:**
+- AdamW: beta2 (try 0.95-0.999), eps (usually keep default)
+- Lion: beta1 and beta2 (similar to AdamW betas)
+- Muon: momentum (0.90-0.95), try both with/without Nesterov
+- Sophia: rho for clipping (0.03-0.05)
 
 ### Training Duration
 
@@ -979,6 +1333,28 @@ The inference system uses:
 **Model hallucinating**
 - Cause: Normal for LLMs, worse with insufficient training
 - Fix: More training data, RLHF for factuality, prompt engineering
+
+### LoRA Issues
+
+**LoRA training not improving**
+- Cause: Rank too low, wrong modules targeted, LR too low
+- Fix: Increase `lora_r` (try 16 or 32), use `all` preset, increase learning rate
+
+**LoRA quality worse than expected**
+- Cause: Rank too low, insufficient training, wrong preset
+- Fix: Increase rank to 16-32, train longer, try `all` preset instead of `minimal`
+
+**Can't load LoRA adapters**
+- Cause: Adapter files missing, wrong path, PEFT version mismatch
+- Fix: Check adapter folder exists, verify path, update PEFT library
+
+**Merge failed**
+- Cause: Checkpoint doesn't have LoRA parameters, corrupted checkpoint
+- Fix: Verify checkpoint was trained with LoRA, try Option 1 (adapter folder) instead
+
+**LoRA using too much memory**
+- Cause: Rank too high, too many modules targeted
+- Fix: Reduce rank to 4-8, use `minimal` or `attention_only` preset
 
 ### Performance Tips
 
