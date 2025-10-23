@@ -12,89 +12,163 @@ from model import POSITIONAL_ENCODINGS, ATTENTION_TYPES, ACTIVATION_TYPES
 from optimizers import OPTIMIZER_NAMES
 from data import list_dataset_splits
 
+# ANSI color codes for terminal styling
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    UNDERLINE = '\033[4m'
+    RESET = '\033[0m'
+
+    # Additional colors
+    PURPLE = '\033[35m'
+    WHITE = '\033[97m'
+    GRAY = '\033[90m'
+
 
 def print_header():
-    """Print CLI header"""
-    print("\n" + "╔" + "═" * 60 + "╗")
-    print("║" + " " * 18 + "🧠 LLM-Laboratory" + " " * 24 + "║")
-    print("╚" + "═" * 60 + "╝")
+    """Print CLI header with enhanced styling"""
+    print(f"\n{Colors.BOLD}{Colors.CYAN}{'═' * 80}{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.PURPLE}{'🧠  L L M - L A B O R A T O R Y':^88}{Colors.RESET}")
+    print(f"{Colors.DIM}{'Train, fine-tune, and deploy custom language models':^80}{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.CYAN}{'═' * 80}{Colors.RESET}\n")
 
 
 def print_menu():
-    """Print main menu"""
-    print("\nMain Menu:\n")
-    print("  MODEL SETUP")
-    print("    1. ⚙️  Configure new model\n")
-    print("  TRAINING PIPELINE")
-    print("    2. 🎯 Base training (from scratch)")
-    print("    3. 🎓 SFT training (instruction tuning)")
-    print("    4. 🧠 RLHF training (alignment)\n")
-    print("  TOOLS")
-    print("    5. 🔀 Merge LoRA adapters")
-    print("    6. 💬 Test model (inference)")
-    print("    7. 👋 Exit")
+    """Print main menu with enhanced styling and descriptions"""
+    print(f"\n{Colors.BOLD}{Colors.WHITE}┌─ Main Menu {'─' * 64}┐{Colors.RESET}\n")
+
+    # Model Setup Section
+    print(f"{Colors.BOLD}{Colors.YELLOW}  ⚙️  MODEL SETUP{Colors.RESET}")
+    print(f"{Colors.GRAY}  ├{'─' * 76}{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}1.{Colors.RESET} {Colors.BOLD}Configure new model{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Define architecture, choose attention mechanisms, set model size{Colors.RESET}\n")
+
+    # Training Pipeline Section
+    print(f"{Colors.BOLD}{Colors.GREEN}  🚀 TRAINING PIPELINE{Colors.RESET}")
+    print(f"{Colors.GRAY}  ├{'─' * 76}{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}2.{Colors.RESET} {Colors.BOLD}Base training{Colors.RESET} {Colors.DIM}(from scratch){Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Pre-train a model on raw text data from the ground up{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}3.{Colors.RESET} {Colors.BOLD}SFT training{Colors.RESET} {Colors.DIM}(instruction tuning){Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Fine-tune on instruction datasets to follow user commands{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}4.{Colors.RESET} {Colors.BOLD}RLHF training{Colors.RESET} {Colors.DIM}(alignment){Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Align model with human preferences using PPO, DPO, or GRPO{Colors.RESET}\n")
+
+    # Tools Section
+    print(f"{Colors.BOLD}{Colors.BLUE}  🔧 TOOLS & UTILITIES{Colors.RESET}")
+    print(f"{Colors.GRAY}  ├{'─' * 76}{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}5.{Colors.RESET} {Colors.BOLD}Merge LoRA adapters{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Merge parameter-efficient LoRA weights back into base model{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}6.{Colors.RESET} {Colors.BOLD}Test model{Colors.RESET} {Colors.DIM}(interactive inference){Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Chat with your trained model in real-time{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}7.{Colors.RESET} {Colors.BOLD}Exit{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Close the application{Colors.RESET}")
+
+    print(f"\n{Colors.BOLD}{Colors.WHITE}└{'─' * 78}┘{Colors.RESET}")
+
+
+def print_section_header(title: str, icon: str = ""):
+    """Print a styled section header"""
+    full_title = f"{icon} {title}" if icon else title
+    print(f"\n{Colors.BOLD}{Colors.CYAN}{'─' * 80}{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.WHITE}{full_title:^88}{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.CYAN}{'─' * 80}{Colors.RESET}\n")
+
+
+def print_subsection(title: str, icon: str = ""):
+    """Print a styled subsection"""
+    full_title = f"{icon} {title}" if icon else title
+    print(f"\n{Colors.BOLD}{Colors.YELLOW}{full_title}{Colors.RESET}")
+    print(f"{Colors.GRAY}{'─' * 60}{Colors.RESET}")
+
+
+def print_success(message: str):
+    """Print a success message"""
+    print(f"\n{Colors.BOLD}{Colors.GREEN}✓ {message}{Colors.RESET}")
+
+
+def print_error(message: str):
+    """Print an error message"""
+    print(f"\n{Colors.BOLD}{Colors.RED}✗ {message}{Colors.RESET}")
+
+
+def print_warning(message: str):
+    """Print a warning message"""
+    print(f"\n{Colors.BOLD}{Colors.YELLOW}⚠ {message}{Colors.RESET}")
+
+
+def print_info(message: str):
+    """Print an info message"""
+    print(f"\n{Colors.BOLD}{Colors.CYAN}ℹ {message}{Colors.RESET}")
 
 
 def get_input(prompt: str, default=None, type_fn=str):
     """Get user input with optional default value"""
     if default is not None:
-        user_input = input(f"{prompt} (default: {default}): ").strip()
+        user_input = input(f"{Colors.BOLD}➤{Colors.RESET} {prompt} {Colors.DIM}(default: {default}){Colors.RESET}: ").strip()
         if not user_input:
             return default
     else:
-        user_input = input(f"{prompt}: ").strip()
+        user_input = input(f"{Colors.BOLD}➤{Colors.RESET} {prompt}: ").strip()
 
     try:
         return type_fn(user_input)
     except ValueError:
-        print(f"Invalid input, using default: {default}")
+        print(f"{Colors.YELLOW}Invalid input, using default: {default}{Colors.RESET}")
         return default
 
 
 def configure_model():
     """Interactive model configuration"""
-    print("\n" + "-" * 60)
-    print("Model Configuration")
-    print("-" * 60)
+    print_section_header("Model Configuration", "⚙️")
 
     config = ModelConfig()
 
     # Tokenizer
-    print("\n📖 Tokenizer Configuration")
+    print_subsection("Tokenizer Configuration", "📖")
     config.tokenizer_name = get_input(
         "Tokenizer name (HuggingFace)",
         default=config.tokenizer_name
     )
 
     # Architecture choices
-    print("\n🏗️  Architecture Choices")
+    print_subsection("Architecture Choices", "🏗️")
 
-    print(f"\nPositional Encoding options: {', '.join(POSITIONAL_ENCODINGS.keys())}")
+    print(f"\n  {Colors.DIM}Positional Encoding options: {Colors.BOLD}{', '.join(POSITIONAL_ENCODINGS.keys())}{Colors.RESET}")
     config.positional_encoding = get_input(
         "Positional encoding",
         default=config.positional_encoding
     )
 
-    print(f"\nAttention type options: {', '.join(ATTENTION_TYPES.keys())}")
+    print(f"\n  {Colors.DIM}Attention type options: {Colors.BOLD}{', '.join(ATTENTION_TYPES.keys())}{Colors.RESET}")
     config.attention_type = get_input(
         "Attention type",
         default=config.attention_type
     )
 
-    print(f"\nNormalization options: layernorm, rmsnorm")
+    print(f"\n  {Colors.DIM}Normalization options: {Colors.BOLD}layernorm, rmsnorm{Colors.RESET}")
     config.norm_type = get_input(
         "Normalization type",
         default=config.norm_type
     )
 
-    print(f"\nActivation options: {', '.join(ACTIVATION_TYPES.keys())}")
+    print(f"\n  {Colors.DIM}Activation options: {Colors.BOLD}{', '.join(ACTIVATION_TYPES.keys())}{Colors.RESET}")
     config.activation = get_input(
         "Feed-forward activation",
         default=config.activation
     )
 
     # Model parameters
-    print("\n⚙️  Model Parameters")
+    print_subsection("Model Parameters", "🔢")
     config.d_model = get_input("Embedding size (d_model)", default=config.d_model, type_fn=int)
     config.n_heads = get_input("Number of attention heads", default=config.n_heads, type_fn=int)
 
@@ -107,28 +181,30 @@ def configure_model():
     config.dropout = get_input("Dropout rate", default=config.dropout, type_fn=float)
 
     # Save config
-    save_path = get_input("\n💾 Save config to", default="model_config.json")
+    print_subsection("Save Configuration", "💾")
+    save_path = get_input("Save config to", default="model_config.json")
     config.save(save_path)
 
     # Show parameter count
     param_count = config.count_params()
-    print(f"\n✅ Model configured!")
-    print(f"   Estimated parameters: {param_count:,}")
-    print(f"   Config saved to: {save_path}")
+    print(f"\n{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.GREEN}✓ Model configured successfully!{Colors.RESET}")
+    print(f"  {Colors.WHITE}Estimated parameters:{Colors.RESET} {Colors.BOLD}{Colors.CYAN}{param_count:,}{Colors.RESET}")
+    print(f"  {Colors.WHITE}Config saved to:{Colors.RESET} {Colors.CYAN}{save_path}{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
 
 
 def configure_training():
     """Interactive base training configuration"""
-    print("\n" + "-" * 60)
-    print("Base Training Configuration")
-    print("-" * 60)
+    print_section_header("Base Training Configuration", "🎯")
 
     # Load model config
-    model_config_path = get_input("\n📖 Model config path", default="model_config.json")
+    print_subsection("Model Configuration", "📖")
+    model_config_path = get_input("Model config path", default="model_config.json")
 
     if not os.path.exists(model_config_path):
-        print(f"❌ Model config not found: {model_config_path}")
-        print("   Please configure a model first.")
+        print_error(f"Model config not found: {model_config_path}")
+        print(f"  {Colors.DIM}Please configure a model first (option 1 in main menu){Colors.RESET}")
         return None, None
 
     model_config = ModelConfig.load(model_config_path)
@@ -136,45 +212,45 @@ def configure_training():
     train_config.model_config_path = model_config_path
 
     # Training steps
-    print("\n🏃 Training Steps")
+    print_subsection("Training Steps", "🏃")
     train_config.max_steps = get_input("Maximum training steps", default=train_config.max_steps, type_fn=int)
 
     # Optimizer
-    print(f"\n🔧 Optimizer")
-    print(f"Options: {', '.join(OPTIMIZER_NAMES)}")
+    print_subsection("Optimizer Configuration", "🔧")
+    print(f"  {Colors.DIM}Available optimizers: {Colors.BOLD}{', '.join(OPTIMIZER_NAMES)}{Colors.RESET}\n")
     train_config.optimizer = get_input("Optimizer", default=train_config.optimizer)
     train_config.lr = get_input("Learning rate", default=train_config.lr, type_fn=float)
     train_config.weight_decay = get_input("Weight decay", default=train_config.weight_decay, type_fn=float)
 
     # Optimizer-specific parameters
     if train_config.optimizer.lower() == "adamw":
-        print(f"\n   AdamW-specific parameters")
-        train_config.adamw_beta1 = get_input("   Beta1", default=train_config.adamw_beta1, type_fn=float)
-        train_config.adamw_beta2 = get_input("   Beta2", default=train_config.adamw_beta2, type_fn=float)
-        train_config.adamw_eps = get_input("   Epsilon", default=train_config.adamw_eps, type_fn=float)
+        print(f"\n  {Colors.BOLD}{Colors.CYAN}AdamW-specific parameters{Colors.RESET}")
+        train_config.adamw_beta1 = get_input("Beta1", default=train_config.adamw_beta1, type_fn=float)
+        train_config.adamw_beta2 = get_input("Beta2", default=train_config.adamw_beta2, type_fn=float)
+        train_config.adamw_eps = get_input("Epsilon", default=train_config.adamw_eps, type_fn=float)
     elif train_config.optimizer.lower() == "muon":
-        print(f"\n   Muon-specific parameters")
-        train_config.muon_momentum = get_input("   Momentum", default=train_config.muon_momentum, type_fn=float)
-        nesterov_input = get_input("   Use Nesterov? [y/n]", default="y" if train_config.muon_nesterov else "n")
+        print(f"\n  {Colors.BOLD}{Colors.CYAN}Muon-specific parameters{Colors.RESET}")
+        train_config.muon_momentum = get_input("Momentum", default=train_config.muon_momentum, type_fn=float)
+        nesterov_input = get_input("Use Nesterov? [y/n]", default="y" if train_config.muon_nesterov else "n")
         train_config.muon_nesterov = nesterov_input.lower() in ['y', 'yes']
     elif train_config.optimizer.lower() == "lion":
-        print(f"\n   Lion-specific parameters")
-        train_config.lion_beta1 = get_input("   Beta1", default=train_config.lion_beta1, type_fn=float)
-        train_config.lion_beta2 = get_input("   Beta2", default=train_config.lion_beta2, type_fn=float)
+        print(f"\n  {Colors.BOLD}{Colors.CYAN}Lion-specific parameters{Colors.RESET}")
+        train_config.lion_beta1 = get_input("Beta1", default=train_config.lion_beta1, type_fn=float)
+        train_config.lion_beta2 = get_input("Beta2", default=train_config.lion_beta2, type_fn=float)
     elif train_config.optimizer.lower() == "sophia":
-        print(f"\n   Sophia-specific parameters")
-        train_config.sophia_beta1 = get_input("   Beta1", default=train_config.sophia_beta1, type_fn=float)
-        train_config.sophia_beta2 = get_input("   Beta2", default=train_config.sophia_beta2, type_fn=float)
-        train_config.sophia_rho = get_input("   Rho (clipping)", default=train_config.sophia_rho, type_fn=float)
+        print(f"\n  {Colors.BOLD}{Colors.CYAN}Sophia-specific parameters{Colors.RESET}")
+        train_config.sophia_beta1 = get_input("Beta1", default=train_config.sophia_beta1, type_fn=float)
+        train_config.sophia_beta2 = get_input("Beta2", default=train_config.sophia_beta2, type_fn=float)
+        train_config.sophia_rho = get_input("Rho (clipping)", default=train_config.sophia_rho, type_fn=float)
 
     # Scheduler
-    print(f"\n📈 Learning Rate Scheduler")
-    print("Options: none, cosine, linear, polynomial")
+    print_subsection("Learning Rate Scheduler", "📈")
+    print(f"  {Colors.DIM}Available schedulers: {Colors.BOLD}none, cosine, linear, polynomial{Colors.RESET}\n")
     train_config.scheduler = get_input("Scheduler", default=train_config.scheduler)
     train_config.warmup_steps = get_input("Warmup steps", default=train_config.warmup_steps, type_fn=int)
 
     # Batch and accumulation
-    print("\n📦 Batch Configuration")
+    print_subsection("Batch Configuration", "📦")
     train_config.batch_size = get_input("Batch size", default=train_config.batch_size, type_fn=int)
     train_config.gradient_accumulation_steps = get_input(
         "Gradient accumulation steps",
@@ -184,7 +260,7 @@ def configure_training():
     train_config.grad_clip = get_input("Gradient clipping", default=train_config.grad_clip, type_fn=float)
 
     # Evaluation
-    print("\n📊 Evaluation")
+    print_subsection("Evaluation", "📊")
     train_config.eval_every = get_input("Eval every N steps", default=train_config.eval_every, type_fn=int)
     train_config.eval_steps = get_input("Steps per evaluation", default=train_config.eval_steps, type_fn=int)
 
@@ -192,17 +268,17 @@ def configure_training():
     train_config.save_best_only = save_best.lower() in ['y', 'yes']
 
     # Dataset configuration
-    print("\n📚 Dataset Configuration")
-    print("Enter datasets (one per line, empty line to finish)")
-    print("Format: dataset_name | subset (optional) | weight (optional)")
-    print("\nExamples:")
-    print("  HuggingFaceFW/fineweb-edu")
-    print("  HuggingFaceFW/fineweb-2 | fra_Latn | 1.0")
-    print("  HuggingFaceFW/fineweb-2 | eng_Latn | 2.0")
+    print_subsection("Dataset Configuration", "📚")
+    print(f"{Colors.DIM}Enter datasets (one per line, empty line to finish)")
+    print(f"Format: dataset_name | subset (optional) | weight (optional){Colors.RESET}\n")
+    print(f"  {Colors.CYAN}Examples:{Colors.RESET}")
+    print(f"    {Colors.DIM}HuggingFaceFW/fineweb-edu")
+    print(f"    HuggingFaceFW/fineweb-2 | fra_Latn | 1.0")
+    print(f"    HuggingFaceFW/fineweb-2 | eng_Latn | 2.0{Colors.RESET}")
 
     datasets = []
     while True:
-        dataset_input = input(f"\nDataset {len(datasets) + 1} (or press Enter to finish): ").strip()
+        dataset_input = input(f"\n{Colors.BOLD}➤{Colors.RESET} Dataset {len(datasets) + 1} (or press Enter to finish): ").strip()
         if not dataset_input:
             break
 
@@ -215,33 +291,33 @@ def configure_training():
             ds_config["weight"] = float(parts[2])
 
         datasets.append(ds_config)
-        print(f"  Added: {ds_config['name']}" + (f" ({ds_config.get('subset', 'no subset')})" if 'subset' in ds_config or len(parts) > 1 else ""))
+        subset_info = f" ({ds_config.get('subset', 'no subset')})" if 'subset' in ds_config or len(parts) > 1 else ""
+        print(f"  {Colors.GREEN}✓{Colors.RESET} Added: {Colors.CYAN}{ds_config['name']}{Colors.RESET}{subset_info}")
 
     if datasets:
         train_config.datasets = datasets
     else:
-        print("Using default dataset: HuggingFaceFW/fineweb-edu")
+        print(f"  {Colors.DIM}Using default dataset: HuggingFaceFW/fineweb-edu{Colors.RESET}")
 
     # Save config
-    save_path = get_input("\n💾 Save training config to", default="training_config.json")
+    print_subsection("Save Configuration", "💾")
+    save_path = get_input("Save training config to", default="training_config.json")
     train_config.save(save_path)
 
-    print(f"\n✅ Training configuration saved to: {save_path}")
+    print_success(f"Training configuration saved to: {save_path}")
 
     return model_config, train_config
 
 
 def start_training():
     """Start base training with configuration"""
-    print("\n" + "-" * 60)
-    print("Start Base Training")
-    print("-" * 60)
+    print_section_header("Start Base Training", "🎯")
 
     # Option to use existing config or create new
-    choice = get_input(
-        "\n1. Use existing training config\n2. Configure new training\nChoice",
-        default="1"
-    )
+    print(f"\n  {Colors.CYAN}1.{Colors.RESET} Use existing training config")
+    print(f"  {Colors.CYAN}2.{Colors.RESET} Configure new training\n")
+
+    choice = get_input("Choice", default="1")
 
     if choice == "2":
         model_config, train_config = configure_training()
@@ -250,13 +326,13 @@ def start_training():
     else:
         train_config_path = get_input("Training config path", default="training_config.json")
         if not os.path.exists(train_config_path):
-            print(f"❌ Training config not found: {train_config_path}")
+            print_error(f"Training config not found: {train_config_path}")
             return
 
         train_config = TrainingConfig.load(train_config_path)
 
         if not os.path.exists(train_config.model_config_path):
-            print(f"❌ Model config not found: {train_config.model_config_path}")
+            print_error(f"Model config not found: {train_config.model_config_path}")
             return
 
         model_config = ModelConfig.load(train_config.model_config_path)
@@ -304,26 +380,29 @@ def start_training():
     output_dir = get_input("\nOutput directory", default="checkpoints")
 
     # Confirm and start
-    print("\n" + "=" * 60)
-    print("Ready to start base training!")
-    print(f"  Model: {model_config.d_model}d, {model_config.n_layers}L, {model_config.n_heads}H")
+    print(f"\n{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.WHITE}Ready to start base training!{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
+    print(f"  {Colors.YELLOW}Model:{Colors.RESET} {Colors.CYAN}{model_config.d_model}d, {model_config.n_layers}L, {model_config.n_heads}H{Colors.RESET}")
+
     if checkpoint_path and additional_steps > 0:
         import torch
         ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         current_step = ckpt.get('step', 0)
-        print(f"  Resuming from: step {current_step}")
-        print(f"  Target steps: {current_step + additional_steps}")
+        print(f"  {Colors.YELLOW}Resuming from:{Colors.RESET} {Colors.CYAN}step {current_step}{Colors.RESET}")
+        print(f"  {Colors.YELLOW}Target steps:{Colors.RESET} {Colors.CYAN}{current_step + additional_steps}{Colors.RESET}")
     elif checkpoint_path:
-        print(f"  Steps: {train_config.max_steps}")
+        print(f"  {Colors.YELLOW}Steps:{Colors.RESET} {Colors.CYAN}{train_config.max_steps}{Colors.RESET}")
     else:
-        print(f"  Steps: {train_config.max_steps}")
-    print(f"  Optimizer: {train_config.optimizer}")
-    print(f"  LR: {train_config.lr}")
-    print("=" * 60)
+        print(f"  {Colors.YELLOW}Steps:{Colors.RESET} {Colors.CYAN}{train_config.max_steps}{Colors.RESET}")
 
-    confirm = get_input("\nStart base training? [y/n]", default="y")
+    print(f"  {Colors.YELLOW}Optimizer:{Colors.RESET} {Colors.CYAN}{train_config.optimizer}{Colors.RESET}")
+    print(f"  {Colors.YELLOW}Learning rate:{Colors.RESET} {Colors.CYAN}{train_config.lr}{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}\n")
+
+    confirm = get_input("Start base training? [y/n]", default="y")
     if confirm.lower() not in ['y', 'yes']:
-        print("Base training cancelled.")
+        print_warning("Base training cancelled.")
         return
 
     # Update training_config.json with new max_steps if additional steps were added
@@ -340,9 +419,9 @@ def start_training():
     try:
         train_model(model_config, train_config, checkpoint_path, output_dir, additional_steps, load_optimizer_state)
     except KeyboardInterrupt:
-        print("\n\n⚠️  Base training interrupted by user")
+        print_warning("\nBase training interrupted by user")
     except Exception as e:
-        print(f"\n\n❌ Base training failed: {e}")
+        print_error(f"\nBase training failed: {e}")
         raise
 
 
@@ -590,12 +669,10 @@ def start_sft_training():
 
 def merge_lora_adapters():
     """Merge LoRA adapters into base model"""
-    print("\n" + "-" * 60)
-    print("Merge LoRA Adapters")
-    print("-" * 60)
+    print_section_header("Merge LoRA Adapters", "🔀")
 
-    print("\nThis tool merges LoRA adapter weights back into the base model.")
-    print("Use this after LoRA training to create a standard checkpoint for RLHF.\n")
+    print(f"{Colors.CYAN}ℹ{Colors.RESET}  This tool merges LoRA adapter weights back into the base model.")
+    print(f"  {Colors.DIM}Use this after LoRA training to create a standard checkpoint for RLHF.{Colors.RESET}\n")
 
     # Ask for input type
     print("Choose input type:")
@@ -824,22 +901,21 @@ def merge_lora_adapters():
 
 def start_inference():
     """Start inference mode"""
-    print("\n" + "-" * 60)
-    print("Inference Mode")
-    print("-" * 60)
+    print_section_header("Interactive Inference Mode", "💬")
 
-    checkpoint_path = get_input("\nCheckpoint path", default="checkpoints/best_model.pt")
+    checkpoint_path = get_input("Checkpoint path", default="checkpoints/best_model.pt")
 
     if not os.path.exists(checkpoint_path):
-        print(f"❌ Checkpoint not found: {checkpoint_path}")
+        print_error(f"Checkpoint not found: {checkpoint_path}")
         return
 
+    print(f"\n{Colors.BOLD}{Colors.CYAN}Loading model...{Colors.RESET}")
     try:
         interactive_inference(checkpoint_path)
     except KeyboardInterrupt:
-        print("\n\n⚠️  Inference interrupted by user")
+        print_warning("\nInference interrupted by user")
     except Exception as e:
-        print(f"\n\n❌ Inference failed: {e}")
+        print_error(f"\nInference failed: {e}")
         raise
 
 
@@ -1121,7 +1197,7 @@ def main():
 
     while True:
         print_menu()
-        choice = input("\nChoice: ").strip()
+        choice = input(f"\n{Colors.BOLD}➤{Colors.RESET} {Colors.WHITE}Enter your choice {Colors.DIM}(1-7){Colors.RESET}: ").strip()
 
         if choice == "1":
             configure_model()
@@ -1136,10 +1212,12 @@ def main():
         elif choice == "6":
             start_inference()
         elif choice == "7":
-            print("\n👋 Goodbye!")
+            print(f"\n{Colors.BOLD}{Colors.CYAN}{'─' * 60}{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.PURPLE}{'Thank you for using LLM-Laboratory!':^60}{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.CYAN}{'─' * 60}{Colors.RESET}\n")
             sys.exit(0)
         else:
-            print("❌ Invalid choice. Please try again.")
+            print_error(f"Invalid choice: '{choice}'. Please enter a number between 1-7.")
 
 
 if __name__ == "__main__":
