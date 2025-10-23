@@ -183,6 +183,16 @@ def configure_model():
     # Save config
     print_subsection("Save Configuration", "💾")
     save_path = get_input("Save config to", default="model_config.json")
+
+    # Sync vocab_size with tokenizer before saving
+    from data import load_tokenizer
+    tokenizer = load_tokenizer(config.tokenizer_name)
+    if config.vocab_size != tokenizer.vocab_size:
+        print(f"\n  {Colors.YELLOW}ℹ{Colors.RESET}  Detected vocab_size mismatch:")
+        print(f"     Config: {config.vocab_size} → Tokenizer: {tokenizer.vocab_size}")
+        print(f"     Updating config to match tokenizer...")
+        config.vocab_size = tokenizer.vocab_size
+
     config.save(save_path)
 
     # Show parameter count

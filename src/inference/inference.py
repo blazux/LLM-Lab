@@ -15,14 +15,21 @@ def load_model_for_inference(checkpoint_path: str):
     model_type = "RLHF-trained" if is_rlhf else "Base"
 
     model_config = checkpoint['model_config']
+
+    # Load tokenizer and validate vocab_size
+    tokenizer = load_tokenizer(model_config.tokenizer_name)
+
+    if model_config.vocab_size != tokenizer.vocab_size:
+        print(f"   ⚠️  WARNING: Checkpoint vocab_size ({model_config.vocab_size}) != tokenizer vocab_size ({tokenizer.vocab_size})")
+        print(f"   This indicates a tokenizer mismatch. Generation quality may be poor.")
+        print(f"   Check that tokenizer_name in config matches the one used during training.")
+
     model = TransformerLLM(model_config)
     model.load_state_dict(checkpoint['model_state_dict'])
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     model.eval()
-
-    tokenizer = load_tokenizer(model_config.tokenizer_name)
 
     # Print model information
     print(f"✅ Loaded {model_type} model")

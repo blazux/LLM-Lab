@@ -142,6 +142,12 @@ def train_model(
     # Load tokenizer and create data streams
     print("\n📚 Loading tokenizer and datasets...")
     tokenizer = load_tokenizer(model_config.tokenizer_name)
+
+    # Validate vocab_size matches tokenizer
+    if model_config.vocab_size != tokenizer.vocab_size:
+        print(f"   ⚠️  WARNING: model_config.vocab_size ({model_config.vocab_size}) != tokenizer.vocab_size ({tokenizer.vocab_size})")
+        print(f"   Automatically updating to {tokenizer.vocab_size} to match tokenizer")
+
     model_config.vocab_size = tokenizer.vocab_size
 
     # Create token stream
