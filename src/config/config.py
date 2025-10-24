@@ -142,7 +142,24 @@ class TrainingConfig:
 
     def __post_init__(self):
         if self.datasets is None:
+            # Default pretraining datasets - industry standards
+            #
+            # Top choices for base pretraining:
+            # 1. FineWeb-Edu (1.3T tokens) - High-quality educational content (used by Llama-3, SmolLM)
+            # 2. FineWeb (15T tokens) - Full web corpus, quality-filtered
+            # 3. RedPajama-v2 (30T tokens) - Massive multilingual dataset
+            # 4. The Pile (825GB) - Academic standard, diverse sources
+            # 5. Dolma (3T tokens) - Very high quality (AI2/OLMo)
+            #
+            # For multilingual: Add FineWeb-2 subsets (supports 95+ languages)
+
             self.datasets = [{"name": "HuggingFaceFW/fineweb-edu", "split": "train"}]
+
+            # Example: Multilingual (English + French)
+            # self.datasets = [
+            #     {"name": "HuggingFaceFW/fineweb-edu", "weight": 2.0},
+            #     {"name": "HuggingFaceFW/fineweb-2", "subset": "fra_Latn", "weight": 1.0}
+            # ]
 
     def save(self, path: str):
         """Save config to JSON file"""

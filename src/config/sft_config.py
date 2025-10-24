@@ -70,13 +70,35 @@ class SFTConfig:
         """Validate and set defaults"""
         # Ensure batch_size is compatible with gradient_accumulation_steps
         if self.datasets is None:
-            # Default to SmolTalk2 SFT config with everyday conversations
-            # User should customize this based on their needs
-            self.datasets = [{
-                "name": "HuggingFaceTB/smoltalk2",
-                "subset": "SFT",
-                "split": "smoltalk_smollm3_everyday_conversations_no_think"
-            }]
+            # Default SFT datasets - industry standards for instruction tuning
+            # Choose based on your goal:
+            #
+            # 1. UltraChat 200k - Multi-turn conversations (used by Zephyr, HuggingFace)
+            #    Best for: General chat abilities, dialogue coherence
+            #
+            # 2. OpenOrca - GPT-4 quality reasoning (1M examples)
+            #    Best for: Complex reasoning, detailed explanations
+            #
+            # 3. SmolTalk2 - Lightweight everyday conversations
+            #    Best for: Natural casual dialogue, smaller models
+
+            self.datasets = [
+                {
+                    "name": "HuggingFaceH4/ultrachat_200k",
+                    "split": "train_sft",
+                    "weight": 1.0
+                },
+                {
+                    "name": "Open-Orca/OpenOrca",
+                    "split": "train",
+                    "weight": 0.5  # Lower weight due to larger size
+                }
+            ]
+
+            # Alternative single-dataset options (comment out above and uncomment one):
+            # self.datasets = [{"name": "HuggingFaceH4/ultrachat_200k", "split": "train_sft"}]
+            # self.datasets = [{"name": "Open-Orca/OpenOrca", "split": "train"}]
+            # self.datasets = [{"name": "HuggingFaceTB/smoltalk2", "subset": "SFT", "split": "smoltalk_smollm3_everyday_conversations_no_think"}]
 
     def save(self, path: str):
         """Save config to JSON file"""

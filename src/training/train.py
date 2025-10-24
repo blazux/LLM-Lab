@@ -76,42 +76,60 @@ def evaluate_model(model: nn.Module, val_loader: DataLoader, config: TrainingCon
     }
 
 
-def setup_schedulers(optimizers: list, config: TrainingConfig):
-    """Setup learning rate schedulers"""
+def setup_schedulers(optimizers: list, config: TrainingConfig, start_step: int = 0):
+    """Setup learning rate schedulers
+
+    Args:
+        optimizers: List of optimizers
+        config: Training configuration
+        start_step: Starting step (for resuming training). When resuming, the scheduler
+                   will treat start_step as step 0 and apply warmup/decay relative to it.
+    """
     schedulers = []
 
     for optimizer in optimizers:
         if config.scheduler == "cosine":
             def lr_lambda(step):
-                if step < config.warmup_steps:
-                    return step / config.warmup_steps
+                # Adjust step to be relative to start_step
+                relative_step = step - start_step
+
+                if relative_step < config.warmup_steps:
+                    return relative_step / config.warmup_steps
                 else:
-                    progress = (step - config.warmup_steps) / (config.max_steps - config.warmup_steps)
+                    # Total steps from start_step to max_steps
+                    total_steps = config.max_steps - start_step
+                    progress = (relative_step - config.warmup_steps) / (total_steps - config.warmup_steps)
                     return 0.5 * (1 + math.cos(math.pi * progress))
 
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=start_step - 1)
 
         elif config.scheduler == "linear":
             def lr_lambda(step):
-                if step < config.warmup_steps:
-                    return step / config.warmup_steps
-                else:
-                    return max(0.0, (config.max_steps - step) / (config.max_steps - config.warmup_steps))
+                relative_step = step - start_step
+                total_steps = config.max_steps - start_step
 
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+                if relative_step < config.warmup_steps:
+                    return relative_step / config.warmup_steps
+                else:
+                    return max(0.0, (total_steps - relative_step) / (total_steps - config.warmup_steps))
+
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=start_step - 1)
 
         elif config.scheduler == "polynomial":
             def lr_lambda(step):
-                if step < config.warmup_steps:
-                    return step / config.warmup_steps
+                relative_step = step - start_step
+                total_steps = config.max_steps - start_step
+
+                if relative_step < config.warmup_steps:
+                    return relative_step / config.warmup_steps
                 else:
-                    progress = (step - config.warmup_steps) / (config.max_steps - config.warmup_steps)
+                    progress = (relative_step - config.warmup_steps) / (total_steps - config.warmup_steps)
                     return (1 - progress) ** 2
 
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=start_step - 1)
 
         else:  # none
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: 1.0)
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: 1.0, last_epoch=start_step - 1)
 
         schedulers.append(scheduler)
 
@@ -165,9 +183,6 @@ def train_model(
     # Setup optimizers
     optimizers = setup_optimizer(model, train_config)
 
-    # Setup schedulers
-    schedulers = setup_schedulers(optimizers, train_config)
-
     # Setup gradient scaler for bfloat16
     scaler = GradScaler()
 
@@ -184,23 +199,19 @@ def train_model(
         model.load_state_dict(checkpoint['model_state_dict'])
         model.to(device)
 
-        if load_optimizer_state:
-            if 'optimizer_states' in checkpoint:
-                for opt, opt_state in zip(optimizers, checkpoint['optimizer_states']):
-                    opt.load_state_dict(opt_state)
-
-            if 'scheduler_states' in checkpoint:
-                for sch, sch_state in zip(schedulers, checkpoint['scheduler_states']):
-                    sch.load_state_dict(sch_state)
-            print("   Loaded optimizer and scheduler states")
-        else:
-            print("   Skipped loading optimizer/scheduler states (starting fresh)")
-
         start_step = checkpoint.get('step', 0)
         total_tokens_seen = checkpoint.get('total_tokens_seen', 0)
         best_val_loss = checkpoint.get('best_val_loss', float('inf'))
 
         print(f"   Resumed from step {start_step}, val_loss={best_val_loss:.4f}")
+
+        if load_optimizer_state:
+            if 'optimizer_states' in checkpoint:
+                for opt, opt_state in zip(optimizers, checkpoint['optimizer_states']):
+                    opt.load_state_dict(opt_state)
+            print("   Loaded optimizer state")
+        else:
+            print("   Skipped loading optimizer state (starting fresh)")
 
         # Handle extended training
         if additional_steps > 0:
@@ -214,6 +225,46 @@ def train_model(
             target_steps = train_config.max_steps
             remaining = target_steps - start_step
             print(f"   Training {remaining} remaining steps (to step {target_steps})")
+
+    # Setup schedulers AFTER determining start_step
+    # Two scenarios:
+    # 1. Resume interrupted training (load_optimizer_state=True): Schedule over ENTIRE range (0→max_steps)
+    # 2. Extend completed training (load_optimizer_state=False): Schedule over NEW range (current→target)
+
+    if load_optimizer_state and checkpoint_path:
+        # Scenario 1: Resume interrupted training
+        # - Create scheduler for the FULL range (step 0 → max_steps)
+        # - Manually set last_epoch to resume point (NOT load state - causes LR mismatch)
+        print(f"\n🔧 Setting up learning rate schedulers (continuing original schedule 0→{train_config.max_steps})...")
+
+        # Set initial_lr before creating scheduler
+        for optimizer in optimizers:
+            for group in optimizer.param_groups:
+                group.setdefault('initial_lr', train_config.lr)
+
+        # Create fresh scheduler with compatible lambda functions
+        schedulers = setup_schedulers(optimizers, train_config, start_step=0)
+
+        # Manually set last_epoch to resume point and update LR
+        for scheduler in schedulers:
+            scheduler.last_epoch = start_step
+            # Recompute LR based on current step
+            for param_group, lr_lambda in zip(scheduler.optimizer.param_groups, scheduler.lr_lambdas):
+                param_group['lr'] = param_group['initial_lr'] * lr_lambda(scheduler.last_epoch)
+
+        print(f"   Scheduler resuming at step {start_step} (LR={optimizers[0].param_groups[0]['lr']:.2e})")
+    else:
+        # Scenario 2: Extend completed training OR fresh training
+        # - Create scheduler for the NEW range (start_step → target_steps)
+        # - Fresh warmup+decay over additional steps
+        print(f"\n🔧 Setting up learning rate schedulers (new schedule {start_step}→{target_steps})...")
+
+        # Set initial_lr manually when last_epoch > -1
+        for optimizer in optimizers:
+            for group in optimizer.param_groups:
+                group.setdefault('initial_lr', group['lr'])
+
+        schedulers = setup_schedulers(optimizers, train_config, start_step=start_step)
 
     # Create datasets
     print("\n📊 Creating data loaders...")

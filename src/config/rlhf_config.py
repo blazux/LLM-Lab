@@ -99,16 +99,32 @@ class RLHFConfig:
             f"algorithm must be 'ppo', 'dpo', or 'grpo', got '{self.algorithm}'"
 
         if self.datasets is None:
-            # Default prompt dataset
+            # Default RLHF datasets - industry standards for preference alignment
+            #
+            # For DPO (Direct Preference Optimization):
+            # 1. Anthropic/hh-rlhf (169k pairs) - Gold standard for helpfulness/harmlessness
+            # 2. Argilla/ultrafeedback-binarized-preferences-cleaned (64k) - Used by Zephyr
+            # 3. Intel/orca_dpo_pairs (13k) - High-quality reasoning pairs
+            #
+            # For PPO/GRPO (Policy Optimization with Reward Model):
+            # - Any prompt dataset works (model generates responses, reward model scores them)
+            # - Anthropic/hh-rlhf works great for general helpfulness
+            #
+            # Reward Models (for PPO/GRPO):
+            # 1. OpenAssistant/reward-model-deberta-v3-large-v2 (current default)
+            # 2. weqweasdas/RM-Mistral-7B (newer, better performance)
+
             if self.algorithm == "dpo":
-                # DPO needs preference datasets
+                # DPO needs preference pairs (chosen vs rejected)
                 self.datasets = [{
                     "name": "Anthropic/hh-rlhf",
                     "subset": None,
                     "split": "train"
                 }]
+                # Alternative DPO datasets:
+                # self.datasets = [{"name": "Argilla/ultrafeedback-binarized-preferences-cleaned", "split": "train"}]
             else:
-                # PPO can use any prompt dataset
+                # PPO/GRPO use prompts + reward model
                 self.datasets = [{
                     "name": "Anthropic/hh-rlhf",
                     "subset": None,
