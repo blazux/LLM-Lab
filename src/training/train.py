@@ -246,11 +246,12 @@ def train_model(
         schedulers = setup_schedulers(optimizers, train_config, start_step=0)
 
         # Manually set last_epoch to resume point and update LR
+        # Set to start_step so that the first scheduler.step() call will compute LR for start_step + 1
         for scheduler in schedulers:
             scheduler.last_epoch = start_step
             # Recompute LR based on current step
             for param_group, lr_lambda in zip(scheduler.optimizer.param_groups, scheduler.lr_lambdas):
-                param_group['lr'] = param_group['initial_lr'] * lr_lambda(scheduler.last_epoch)
+                param_group['lr'] = param_group['initial_lr'] * lr_lambda(start_step)
 
         print(f"   Scheduler resuming at step {start_step} (LR={optimizers[0].param_groups[0]['lr']:.2e})")
     else:
@@ -265,6 +266,17 @@ def train_model(
                 group.setdefault('initial_lr', group['lr'])
 
         schedulers = setup_schedulers(optimizers, train_config, start_step=start_step)
+
+        # Initialize scheduler LR for the first iteration
+        # The scheduler was created with last_epoch = start_step - 1
+        # We need to set it to start_step and compute the initial LR
+        for scheduler in schedulers:
+            scheduler.last_epoch = start_step
+            # Manually set initial LR for the first iteration
+            for param_group, lr_lambda in zip(scheduler.optimizer.param_groups, scheduler.lr_lambdas):
+                param_group['lr'] = param_group['initial_lr'] * lr_lambda(start_step)
+
+        print(f"   Scheduler starting at step {start_step} (LR={optimizers[0].param_groups[0]['lr']:.2e})")
 
     # Create datasets
     print("\n📊 Creating data loaders...")
@@ -336,10 +348,11 @@ def train_model(
                     scaler.step(optimizer)
                     optimizer.zero_grad()
 
-                for scheduler in schedulers:
-                    scheduler.step()
-
                 scaler.update()
+
+            # Step scheduler every iteration (not just after gradient accumulation)
+            for scheduler in schedulers:
+                scheduler.step()
 
             # Logging
             if step % 10 == 0:
