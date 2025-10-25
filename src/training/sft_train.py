@@ -330,10 +330,12 @@ def train_sft(config: SFTConfig):
     temp_config.scheduler = config.scheduler
 
     optimizers = setup_optimizer(model, temp_config)
-    optimizer = optimizers[0] if isinstance(optimizers, list) else optimizers
 
-    # Setup scheduler
-    scheduler = setup_sft_scheduler(optimizer, config)
+    # Setup schedulers for all optimizers
+    schedulers = []
+    for optimizer in optimizers:
+        scheduler = setup_sft_scheduler(optimizer, config)
+        schedulers.append(scheduler)
 
     # Setup gradient scaler for bfloat16
     scaler = GradScaler()
@@ -382,16 +384,21 @@ def train_sft(config: SFTConfig):
 
         # Optimizer step after accumulation
         if (step + 1) % config.gradient_accumulation_steps == 0:
-            scaler.unscale_(optimizer)
+            for optimizer in optimizers:
+                scaler.unscale_(optimizer)
 
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 model.parameters(),
                 config.max_grad_norm
             )
 
-            scaler.step(optimizer)
-            optimizer.zero_grad()
-            scheduler.step()
+            for optimizer in optimizers:
+                scaler.step(optimizer)
+                optimizer.zero_grad()
+
+            for scheduler in schedulers:
+                scheduler.step()
+
             scaler.update()
 
         # Logging
@@ -407,7 +414,7 @@ def train_sft(config: SFTConfig):
                 'loss': f'{current_loss:.4f}',
                 'acc': f'{accuracy:.3f}',
                 'ppl': f'{perplexity:.1f}',
-                'lr': f'{optimizer.param_groups[0]["lr"]:.2e}'
+                'lr': f'{optimizers[0].param_groups[0]["lr"]:.2e}'
             })
 
         # Evaluation
@@ -457,8 +464,8 @@ def train_sft(config: SFTConfig):
                     # For full fine-tuning: save complete checkpoint
                     checkpoint_data = {
                         'model_state_dict': model.state_dict(),
-                        'optimizer_state': optimizer.state_dict(),
-                        'scheduler_state': scheduler.state_dict(),
+                        'optimizer_states': [opt.state_dict() for opt in optimizers],
+                        'scheduler_states': [sch.state_dict() for sch in schedulers],
                         'model_config': model_config,
                         'sft_config': config,
                         'step': step,
@@ -492,8 +499,8 @@ def train_sft(config: SFTConfig):
                     # For full fine-tuning: save complete checkpoint
                     checkpoint_data = {
                         'model_state_dict': model.state_dict(),
-                        'optimizer_state': optimizer.state_dict(),
-                        'scheduler_state': scheduler.state_dict(),
+                        'optimizer_states': [opt.state_dict() for opt in optimizers],
+                        'scheduler_states': [sch.state_dict() for sch in schedulers],
                         'model_config': model_config,
                         'sft_config': config,
                         'step': step,
@@ -533,8 +540,8 @@ def train_sft(config: SFTConfig):
         # For full fine-tuning: save complete checkpoint
         torch.save({
             'model_state_dict': model.state_dict(),
-            'optimizer_state': optimizer.state_dict(),
-            'scheduler_state': scheduler.state_dict(),
+            'optimizer_states': [opt.state_dict() for opt in optimizers],
+            'scheduler_states': [sch.state_dict() for sch in schedulers],
             'model_config': model_config,
             'sft_config': config,
             'step': step,

@@ -394,7 +394,7 @@ Datasets are loaded from HuggingFace and can be interleaved with custom weights.
 ```
 HuggingFaceFW/fineweb-edu
 HuggingFaceFW/fineweb-2 | fra_Latn | 1.0
-HuggingFaceFW/fineweb-2 | eng_Latn | 2.0
+HuggingFaceFW/fineweb-2 | spa_Latn | 2.0
 ```
 
 **Multiple datasets:** Automatically interleaved based on weights

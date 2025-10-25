@@ -284,7 +284,7 @@ def configure_training():
     print(f"  {Colors.CYAN}Examples:{Colors.RESET}")
     print(f"    {Colors.DIM}HuggingFaceFW/fineweb-edu")
     print(f"    HuggingFaceFW/fineweb-2 | fra_Latn | 1.0")
-    print(f"    HuggingFaceFW/fineweb-2 | eng_Latn | 2.0{Colors.RESET}")
+    print(f"    HuggingFaceFW/fineweb-2 | spa_Latn | 2.0{Colors.RESET}")
 
     datasets = []
     while True:
@@ -380,7 +380,7 @@ def start_training():
 
                 # Ask about optimizer state loading
                 print(f"\n🔧 Current config optimizer: {train_config.optimizer}")
-                load_opt = get_input("   Load optimizer state from checkpoint? [y/n] (say 'n' if switching optimizers)", default="y")
+                load_opt = get_input("   Load optimizer state from checkpoint? [y/n] (say 'n' if switching optimizers)", default="n")
                 load_optimizer_state = load_opt.lower() in ['y', 'yes']
             except Exception as e:
                 print(f"⚠️  Could not read checkpoint: {e}")
@@ -554,7 +554,7 @@ def configure_sft():
     print("\nExamples:")
     print("  HuggingFaceTB/smoltalk2 | SFT | smoltalk_smollm3_everyday_conversations_no_think")
     print("  OpenAssistant/oasst1 | | train | 1.5")
-    print("  HuggingFaceFW/fineweb-edu-sft | | train | 2.0")
+    print("  HuggingFaceH4/ultrachat_200k | | train_sft | 2.0")
 
     datasets = []
     while True:

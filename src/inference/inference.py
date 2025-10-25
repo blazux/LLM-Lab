@@ -12,7 +12,14 @@ def load_model_for_inference(checkpoint_path: str):
 
     # Detect model type
     is_rlhf = 'rlhf_config' in checkpoint
-    model_type = "RLHF-trained" if is_rlhf else "Base"
+    is_sft = 'sft_config' in checkpoint
+
+    if is_rlhf:
+        model_type = "RLHF-trained"
+    elif is_sft:
+        model_type = "SFT (instruction-tuned)"
+    else:
+        model_type = "Base (pretrained)"
 
     model_config = checkpoint['model_config']
 
@@ -33,6 +40,8 @@ def load_model_for_inference(checkpoint_path: str):
 
     # Print model information
     print(f"✅ Loaded {model_type} model")
+    print(f"   Checkpoint: {checkpoint_path}")
+    print(f"   Training step: {checkpoint.get('step', 'N/A')}")
     if is_rlhf:
         rlhf_config = checkpoint['rlhf_config']
         print(f"   Policy checkpoint: {rlhf_config.policy_checkpoint}")
@@ -148,13 +157,19 @@ def generate_text(
 
 
 def interactive_inference(checkpoint_path: str):
-    """Interactive inference mode (supports both base and RLHF-trained models)"""
+    """Interactive inference mode (supports base and RLHF-trained models)"""
     print("\n🤖 Loading model for inference...")
     model, tokenizer, device = load_model_for_inference(checkpoint_path)
+
+    # Detect if this is an SFT/RLHF model (needs chat template)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    is_chat_model = 'sft_config' in checkpoint or 'rlhf_config' in checkpoint
     print()
 
     print("=" * 60)
     print("Interactive Inference Mode")
+    if is_chat_model:
+        print("Chat model detected - using chat template")
     print("=" * 60)
     print("Type 'quit' or 'exit' to stop\n")
 
@@ -197,8 +212,20 @@ def interactive_inference(checkpoint_path: str):
         print("Generating...")
         print("=" * 60 + "\n")
 
+        # Apply chat template if this is a chat model
+        if is_chat_model and hasattr(tokenizer, 'apply_chat_template'):
+            # Format as chat message
+            messages = [{"role": "user", "content": prompt}]
+            formatted_prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+        else:
+            formatted_prompt = prompt
+
         generated_text = generate_text(
-            model, tokenizer, device, prompt,
+            model, tokenizer, device, formatted_prompt,
             max_tokens=max_tokens,
             temperature=temperature,
             top_k=top_k,
