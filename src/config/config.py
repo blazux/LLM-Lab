@@ -109,6 +109,9 @@ class ModelConfig:
             # Per-layer parameters for Mamba2
             d_inner = self.d_model * self.expand_factor
 
+            # Auto-compute dt_rank if not set (same as __post_init__)
+            dt_rank = self.dt_rank if self.dt_rank is not None else (self.d_model + 15) // 16
+
             # Input projection (d_model -> 2 * d_inner for x and z)
             input_proj_params = self.d_model * (2 * d_inner)
 
@@ -123,7 +126,7 @@ class ModelConfig:
                 d_inner * self.state_size +  # B
                 d_inner * self.state_size +  # C
                 d_inner +  # D
-                d_inner * self.dt_rank + self.dt_rank  # dt projection
+                d_inner * dt_rank + dt_rank  # dt projection
             )
 
             # Convolution kernel
