@@ -9,7 +9,7 @@ import os
 from tqdm import tqdm
 
 from config import ModelConfig, TrainingConfig
-from model import TransformerLLM
+from model.factory import build_model
 from optimizers import setup_optimizer
 from data import StreamingTokenDataset, lm_collate_fn, load_tokenizer, create_token_stream
 
@@ -172,8 +172,8 @@ def train_model(
     token_stream_fn = create_token_stream(train_config.datasets, tokenizer)
 
     # Initialize model
-    print("\n🔧 Building model...")
-    model = TransformerLLM(model_config)
+    print(f"\n🔧 Building {model_config.model_architecture} model...")
+    model = build_model(model_config)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
 

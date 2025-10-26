@@ -5,44 +5,71 @@ from typing import Optional
 
 @dataclass
 class ModelConfig:
-    """Model architecture configuration"""
+    """Model architecture configuration (supports both Transformer and Mamba2)"""
 
-    # Architecture choices
+    # Architecture selection
+    model_architecture: str = "transformer"  # "transformer" or "mamba2"
+
+    # Common parameters
     tokenizer_name: str = "Qwen/Qwen2.5-0.5B"
-    positional_encoding: str = "rope"
-    attention_type: str = "gqa"
-    norm_type: str = "rmsnorm"
-    activation: str = "swiglu"
-
-    # Model parameters
     d_model: int = 896
-    n_heads: int = 14
-    n_kv_heads: int = 2
-    d_ff: int = 4864
     n_layers: int = 24
     vocab_size: int = 151936
     max_seq_len: int = 1024
     dropout: float = 0.0
+    norm_type: str = "rmsnorm"
+    norm_eps: float = 1e-6
 
-    # Additional parameters
+    # Transformer-specific parameters (optional for Mamba2)
+    positional_encoding: Optional[str] = "rope"
+    attention_type: Optional[str] = "gqa"
+    activation: Optional[str] = "swiglu"
+    n_heads: Optional[int] = 14
+    n_kv_heads: Optional[int] = 2
+    d_ff: Optional[int] = 4864
     sliding_window: Optional[int] = None
     attention_bias: bool = False
-    norm_eps: float = 1e-6
+
+    # Mamba2-specific parameters (optional for Transformer)
+    state_size: int = 16  # SSM state dimension (d_state)
+    expand_factor: int = 2  # Expansion ratio for Mamba2
+    dt_rank: Optional[int] = None  # Rank for Δ (time step) - auto if None
+    conv_kernel_size: int = 4  # Convolution kernel size
+    use_bias: bool = True  # Whether to use bias in projections
 
     # PEFT compatibility attributes
     tie_word_embeddings: bool = True  # We do tie embeddings in model.py
     is_encoder_decoder: bool = False  # Decoder-only model
-    model_type: str = "custom_transformer"  # Custom model type
+    model_type: str = "custom_transformer"  # Custom model type (PEFT compat)
 
     def __post_init__(self):
-        """Validate configuration"""
-        assert self.d_model % self.n_heads == 0, "d_model must be divisible by n_heads"
-        if self.attention_type == "gqa":
-            assert self.n_heads % self.n_kv_heads == 0, "n_heads must be divisible by n_kv_heads"
+        """Validate configuration based on architecture type"""
+        if self.model_architecture == "transformer":
+            # Transformer-specific validation
+            assert self.n_heads is not None, "n_heads required for transformer"
+            assert self.d_model % self.n_heads == 0, "d_model must be divisible by n_heads"
+            if self.attention_type == "gqa":
+                assert self.n_kv_heads is not None, "n_kv_heads required for GQA"
+                assert self.n_heads % self.n_kv_heads == 0, "n_heads must be divisible by n_kv_heads"
 
-        self.d_k = self.d_model // self.n_heads
-        if self.attention_type == "gqa":
-            self.n_kv_groups = self.n_heads // self.n_kv_heads
+            self.d_k = self.d_model // self.n_heads
+            if self.attention_type == "gqa":
+                self.n_kv_groups = self.n_heads // self.n_kv_heads
+
+        elif self.model_architecture == "mamba2":
+            # Mamba2-specific validation
+            assert self.state_size > 0, "state_size must be positive"
+            assert self.expand_factor > 0, "expand_factor must be positive"
+
+            # Auto-compute dt_rank if not specified (following Mamba2 paper)
+            if self.dt_rank is None:
+                self.dt_rank = (self.d_model + 15) // 16
+
+            # Set d_k for compatibility (not used in Mamba2 but may be checked)
+            self.d_k = self.d_model
+
+        else:
+            raise ValueError(f"Unknown model_architecture: {self.model_architecture}")
 
     def get(self, key: str, default=None):
         """Dict-like get method for PEFT compatibility"""
@@ -54,28 +81,65 @@ class ModelConfig:
 
     def count_params(self) -> int:
         """Estimate total number of parameters"""
-        # Embeddings
+        # Embeddings (common to both architectures)
         embed_params = self.vocab_size * self.d_model
 
-        # Per-layer parameters
-        # Attention: Q, K, V projections + output projection
-        if self.attention_type == "mha":
-            attn_params = 4 * self.d_model * self.d_model
-        elif self.attention_type == "mqa":
-            attn_params = self.d_model * self.d_model + 2 * self.d_model * self.d_k + self.d_model * self.d_model
-        else:  # gqa
-            attn_params = self.d_model * self.d_model + 2 * self.n_kv_heads * self.d_k * self.d_model + self.d_model * self.d_model
+        if self.model_architecture == "transformer":
+            # Per-layer parameters for Transformer
+            # Attention: Q, K, V projections + output projection
+            if self.attention_type == "mha":
+                attn_params = 4 * self.d_model * self.d_model
+            elif self.attention_type == "mqa":
+                attn_params = self.d_model * self.d_model + 2 * self.d_model * self.d_k + self.d_model * self.d_model
+            else:  # gqa
+                attn_params = self.d_model * self.d_model + 2 * self.n_kv_heads * self.d_k * self.d_model + self.d_model * self.d_model
 
-        # Feed-forward
-        if self.activation == "swiglu":
-            ff_params = 3 * self.d_model * self.d_ff
+            # Feed-forward
+            if self.activation == "swiglu":
+                ff_params = 3 * self.d_model * self.d_ff
+            else:
+                ff_params = 2 * self.d_model * self.d_ff
+
+            # Normalization (2 per layer)
+            norm_params = 4 * self.d_model
+
+            layer_params = attn_params + ff_params + norm_params
+
+        elif self.model_architecture == "mamba2":
+            # Per-layer parameters for Mamba2
+            d_inner = self.d_model * self.expand_factor
+
+            # Input projection (d_model -> 2 * d_inner for x and z)
+            input_proj_params = self.d_model * (2 * d_inner)
+
+            # SSM parameters (A, B, C, D, dt)
+            # A: (d_inner, state_size)
+            # B: (d_inner, state_size)
+            # C: (d_inner, state_size)
+            # D: (d_inner,)
+            # dt: (d_inner, dt_rank) + (dt_rank,)
+            ssm_params = (
+                d_inner * self.state_size +  # A
+                d_inner * self.state_size +  # B
+                d_inner * self.state_size +  # C
+                d_inner +  # D
+                d_inner * self.dt_rank + self.dt_rank  # dt projection
+            )
+
+            # Convolution kernel
+            conv_params = d_inner * self.conv_kernel_size
+
+            # Output projection (d_inner -> d_model)
+            output_proj_params = d_inner * self.d_model
+
+            # Normalization (1 per layer for pre-norm)
+            norm_params = 2 * self.d_model
+
+            layer_params = input_proj_params + ssm_params + conv_params + output_proj_params + norm_params
+
         else:
-            ff_params = 2 * self.d_model * self.d_ff
+            raise ValueError(f"Unknown model_architecture: {self.model_architecture}")
 
-        # Normalization (2 per layer)
-        norm_params = 4 * self.d_model
-
-        layer_params = attn_params + ff_params + norm_params
         total_params = embed_params + self.n_layers * layer_params + self.d_model  # +d_model for final norm
 
         return total_params

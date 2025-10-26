@@ -284,6 +284,62 @@ class StandardFFN(nn.Module):
 
 
 # ============================================================================
+# MAMBA2 SSM BLOCK
+# ============================================================================
+
+class Mamba2Block(nn.Module):
+    """
+    Mamba2 State Space Model block wrapper
+
+    This wraps the optimized mamba-ssm implementation from:
+    https://github.com/state-spaces/mamba
+
+    Note: Requires mamba-ssm package:
+        pip install mamba-ssm causal-conv1d
+    """
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        try:
+            from mamba_ssm import Mamba2
+        except ImportError:
+            raise ImportError(
+                "mamba-ssm package is required for Mamba2 models.\n"
+                "Install with: pip install mamba-ssm causal-conv1d>=1.2.0\n"
+                "See: https://github.com/state-spaces/mamba"
+            )
+
+        # Normalization before Mamba2 (pre-norm architecture)
+        NormClass = NORM_TYPES[config.norm_type]
+        self.norm = NormClass(config.d_model, eps=config.norm_eps)
+
+        # Mamba2 SSM layer with optimized CUDA kernels
+        self.mamba = Mamba2(
+            d_model=config.d_model,
+            d_state=config.state_size,
+            d_conv=config.conv_kernel_size,
+            expand=config.expand_factor,
+            headdim=64,  # Standard head dimension for Mamba2
+            ngroups=1,  # Number of groups for multi-head SSM (1 = single head)
+            chunk_size=256,  # Chunk size for parallel scan
+        )
+
+    def forward(self, x):
+        """
+        Forward pass with residual connection
+
+        Args:
+            x: (batch, seq_len, d_model)
+
+        Returns:
+            x: (batch, seq_len, d_model)
+        """
+        # Pre-norm with residual connection
+        return x + self.mamba(self.norm(x))
+
+
+# ============================================================================
 # REGISTRIES
 # ============================================================================
 
