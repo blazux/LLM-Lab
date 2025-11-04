@@ -10,7 +10,7 @@ import os
 from tqdm import tqdm
 from typing import Optional, List, Tuple
 
-from model import TransformerLLM
+from model.factory import build_model
 from config import RLHFConfig
 from data import load_tokenizer
 
@@ -35,7 +35,7 @@ def load_policy_model(checkpoint_path: str, device: torch.device, rlhf_config: O
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
     model_config = checkpoint['model_config']
-    model = TransformerLLM(model_config)
+    model = build_model(model_config)
     model.load_state_dict(checkpoint['model_state_dict'])
 
     # Apply LoRA if configured

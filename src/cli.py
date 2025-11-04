@@ -133,6 +133,22 @@ def configure_model():
 
     config = ModelConfig()
 
+    # Architecture selection
+    print_subsection("Architecture Selection", "🏛️")
+    print(f"\n  {Colors.CYAN}Available architectures:{Colors.RESET}")
+    print(f"    {Colors.BOLD}transformer{Colors.RESET} - Traditional attention-based model (O(N²) complexity)")
+    print(f"    {Colors.BOLD}mamba2{Colors.RESET}     - State-space model (O(N) complexity, longer context)")
+    print()
+    config.model_architecture = get_input(
+        "Model architecture",
+        default=config.model_architecture
+    )
+
+    if config.model_architecture not in ["transformer", "mamba2"]:
+        print_error(f"Invalid architecture: {config.model_architecture}")
+        print(f"  {Colors.DIM}Supported: transformer, mamba2{Colors.RESET}")
+        return
+
     # Tokenizer
     print_subsection("Tokenizer Configuration", "📖")
     config.tokenizer_name = get_input(
@@ -140,20 +156,12 @@ def configure_model():
         default=config.tokenizer_name
     )
 
-    # Architecture choices
-    print_subsection("Architecture Choices", "🏗️")
-
-    print(f"\n  {Colors.DIM}Positional Encoding options: {Colors.BOLD}{', '.join(POSITIONAL_ENCODINGS.keys())}{Colors.RESET}")
-    config.positional_encoding = get_input(
-        "Positional encoding",
-        default=config.positional_encoding
-    )
-
-    print(f"\n  {Colors.DIM}Attention type options: {Colors.BOLD}{', '.join(ATTENTION_TYPES.keys())}{Colors.RESET}")
-    config.attention_type = get_input(
-        "Attention type",
-        default=config.attention_type
-    )
+    # Common parameters
+    print_subsection("Model Parameters", "🔢")
+    config.d_model = get_input("Embedding size (d_model)", default=config.d_model, type_fn=int)
+    config.n_layers = get_input("Number of layers", default=config.n_layers, type_fn=int)
+    config.max_seq_len = get_input("Maximum sequence length", default=config.max_seq_len, type_fn=int)
+    config.dropout = get_input("Dropout rate", default=config.dropout, type_fn=float)
 
     print(f"\n  {Colors.DIM}Normalization options: {Colors.BOLD}layernorm, rmsnorm{Colors.RESET}")
     config.norm_type = get_input(
@@ -161,28 +169,94 @@ def configure_model():
         default=config.norm_type
     )
 
-    print(f"\n  {Colors.DIM}Activation options: {Colors.BOLD}{', '.join(ACTIVATION_TYPES.keys())}{Colors.RESET}")
-    config.activation = get_input(
-        "Feed-forward activation",
-        default=config.activation
-    )
+    if config.model_architecture == "transformer":
+        # Transformer-specific configuration
+        print_subsection("Transformer Architecture", "🔀")
 
-    # Model parameters
-    print_subsection("Model Parameters", "🔢")
-    config.d_model = get_input("Embedding size (d_model)", default=config.d_model, type_fn=int)
-    config.n_heads = get_input("Number of attention heads", default=config.n_heads, type_fn=int)
+        print(f"\n  {Colors.DIM}Positional Encoding options: {Colors.BOLD}{', '.join(POSITIONAL_ENCODINGS.keys())}{Colors.RESET}")
+        config.positional_encoding = get_input(
+            "Positional encoding",
+            default=config.positional_encoding
+        )
 
-    if config.attention_type == "gqa":
-        config.n_kv_heads = get_input("Number of KV heads (for GQA)", default=config.n_kv_heads, type_fn=int)
+        print(f"\n  {Colors.DIM}Attention type options: {Colors.BOLD}{', '.join(ATTENTION_TYPES.keys())}{Colors.RESET}")
+        config.attention_type = get_input(
+            "Attention type",
+            default=config.attention_type
+        )
 
-    config.d_ff = get_input("Feed-forward hidden size (d_ff)", default=config.d_ff, type_fn=int)
-    config.n_layers = get_input("Number of layers", default=config.n_layers, type_fn=int)
-    config.max_seq_len = get_input("Maximum sequence length", default=config.max_seq_len, type_fn=int)
-    config.dropout = get_input("Dropout rate", default=config.dropout, type_fn=float)
+        config.n_heads = get_input("Number of attention heads", default=config.n_heads, type_fn=int)
+
+        if config.attention_type == "gqa":
+            config.n_kv_heads = get_input("Number of KV heads (for GQA)", default=config.n_kv_heads, type_fn=int)
+
+        print(f"\n  {Colors.DIM}Activation options: {Colors.BOLD}{', '.join(ACTIVATION_TYPES.keys())}{Colors.RESET}")
+        config.activation = get_input(
+            "Feed-forward activation",
+            default=config.activation
+        )
+
+        config.d_ff = get_input("Feed-forward hidden size (d_ff)", default=config.d_ff, type_fn=int)
+
+        # Sliding window attention (optional)
+        print(f"\n  {Colors.DIM}Sliding window attention limits each token's attention to nearby tokens{Colors.RESET}")
+        print(f"  {Colors.DIM}Default (None) = full attention. Example: 2048 for local attention{Colors.RESET}")
+        sw_input = get_input(
+            "Sliding window size (or 'none' for full attention)",
+            default="none" if config.sliding_window is None else str(config.sliding_window)
+        )
+        if sw_input.lower() in ['none', 'null', '']:
+            config.sliding_window = None
+        else:
+            config.sliding_window = int(sw_input)
+
+    elif config.model_architecture == "mamba2":
+        # Mamba2-specific configuration
+        print_subsection("Mamba2 State-Space Architecture", "🌊")
+
+        print(f"\n  {Colors.CYAN}ℹ{Colors.RESET}  Mamba2 replaces attention with state-space models")
+        print(f"     {Colors.DIM}Offers O(N) complexity and efficient long-context processing{Colors.RESET}")
+        print(f"     {Colors.DIM}Uses custom PyTorch implementation (no external dependencies){Colors.RESET}")
+        print()
+
+        config.state_size = get_input(
+            "SSM state dimension (d_state)",
+            default=config.state_size,
+            type_fn=int
+        )
+
+        config.expand_factor = get_input(
+            "Hidden dimension expansion factor",
+            default=config.expand_factor,
+            type_fn=int
+        )
+
+        config.conv_kernel_size = get_input(
+            "Convolution kernel size",
+            default=config.conv_kernel_size,
+            type_fn=int
+        )
+
+        print(f"\n  {Colors.DIM}Note: dt_rank is auto-computed if not specified{Colors.RESET}")
+        dt_rank_input = get_input(
+            "Time-step projection rank (or 'auto')",
+            default="auto"
+        )
+        if dt_rank_input.lower() == "auto":
+            config.dt_rank = None  # Will be auto-computed
+        else:
+            config.dt_rank = int(dt_rank_input)
 
     # Save config
     print_subsection("Save Configuration", "💾")
-    save_path = get_input("Save config to", default="model_config.json")
+
+    # Suggest appropriate default filename based on architecture
+    if config.model_architecture == "mamba2":
+        default_save_path = "model_config_mamba2.json"
+    else:
+        default_save_path = "model_config.json"
+
+    save_path = get_input("Save config to", default=default_save_path)
 
     # Sync vocab_size with tokenizer before saving
     from data import load_tokenizer
@@ -198,10 +272,16 @@ def configure_model():
     # Show parameter count
     param_count = config.count_params()
     print(f"\n{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
-    print(f"{Colors.BOLD}{Colors.GREEN}✓ Model configured successfully!{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.GREEN}✓ {config.model_architecture.capitalize()} model configured successfully!{Colors.RESET}")
+    print(f"  {Colors.WHITE}Architecture:{Colors.RESET} {Colors.BOLD}{Colors.CYAN}{config.model_architecture}{Colors.RESET}")
     print(f"  {Colors.WHITE}Estimated parameters:{Colors.RESET} {Colors.BOLD}{Colors.CYAN}{param_count:,}{Colors.RESET}")
     print(f"  {Colors.WHITE}Config saved to:{Colors.RESET} {Colors.CYAN}{save_path}{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
+
+    if config.model_architecture == "mamba2":
+        print(f"\n  {Colors.CYAN}ℹ{Colors.RESET}  {Colors.BOLD}Using custom PyTorch Mamba2 implementation{Colors.RESET}")
+        print(f"     No external dependencies required")
+        print(f"     Works with gradient checkpointing for memory efficiency")
 
 
 def configure_training():

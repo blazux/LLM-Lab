@@ -18,22 +18,41 @@ def get_lora_target_modules(model_config: ModelConfig, preset: str) -> List[str]
     Returns:
         List of module names to apply LoRA to
     """
-    # Define attention modules (common to all configurations)
-    attention_modules = ["q_proj", "k_proj", "v_proj", "w_o"]
+    if model_config.model_architecture == "mamba2":
+        # Mamba2-specific modules
+        # The mamba-ssm Mamba2 layer has:
+        # - in_proj: projects input to 2*d_inner for x and z paths
+        # - out_proj: projects d_inner back to d_model
+        # - conv1d: optional convolution layer
+        # - dt_proj: time-step projection
 
-    # Define FFN modules based on activation type
-    if model_config.activation == "swiglu":
-        ffn_modules = ["gate_proj", "up_proj", "down_proj"]
-    else:
-        ffn_modules = ["linear1", "linear2"]
+        mamba_modules = ["in_proj", "out_proj"]  # Main projections
+        mamba_extended = mamba_modules + ["dt_proj"]  # Include time-step projection
 
-    # Map presets to target modules
-    preset_mapping = {
-        "minimal": ["q_proj", "v_proj"],
-        "attention_only": attention_modules,
-        "ffn_only": ffn_modules,
-        "all": attention_modules + ffn_modules,
-    }
+        preset_mapping = {
+            "minimal": ["in_proj"],  # Input projection only
+            "attention_only": mamba_modules,  # In Mamba2, equivalent to "main SSM layers"
+            "ffn_only": mamba_modules,  # Same as attention_only for Mamba2
+            "all": mamba_extended,  # All trainable projections
+        }
+
+    else:  # transformer
+        # Define attention modules (common to all configurations)
+        attention_modules = ["q_proj", "k_proj", "v_proj", "w_o"]
+
+        # Define FFN modules based on activation type
+        if model_config.activation == "swiglu":
+            ffn_modules = ["gate_proj", "up_proj", "down_proj"]
+        else:
+            ffn_modules = ["linear1", "linear2"]
+
+        # Map presets to target modules
+        preset_mapping = {
+            "minimal": ["q_proj", "v_proj"],
+            "attention_only": attention_modules,
+            "ffn_only": ffn_modules,
+            "all": attention_modules + ffn_modules,
+        }
 
     if preset == "custom":
         # For custom, caller will provide target_modules directly
@@ -57,19 +76,28 @@ def get_available_presets(model_config: ModelConfig) -> Dict[str, str]:
     Returns:
         Dictionary mapping preset names to descriptions
     """
-    # Determine FFN type for descriptions
-    if model_config.activation == "swiglu":
-        ffn_desc = "gate_proj, up_proj, down_proj"
-    else:
-        ffn_desc = "linear1, linear2"
+    if model_config.model_architecture == "mamba2":
+        presets = {
+            "minimal": "Input projection only (fastest, lowest VRAM)",
+            "attention_only": "Main SSM layers: in_proj, out_proj",
+            "ffn_only": "Main SSM layers: in_proj, out_proj (same as attention_only)",
+            "all": "All projections including time-step (maximum adaptation)",
+            "custom": "Specify target modules manually"
+        }
+    else:  # transformer
+        # Determine FFN type for descriptions
+        if model_config.activation == "swiglu":
+            ffn_desc = "gate_proj, up_proj, down_proj"
+        else:
+            ffn_desc = "linear1, linear2"
 
-    presets = {
-        "minimal": "Q+V projections only (fastest, lowest VRAM)",
-        "attention_only": "All attention layers: q_proj, k_proj, v_proj, w_o",
-        "ffn_only": f"All FFN layers: {ffn_desc}",
-        "all": f"Attention + FFN (maximum adaptation capability)",
-        "custom": "Specify target modules manually"
-    }
+        presets = {
+            "minimal": "Q+V projections only (fastest, lowest VRAM)",
+            "attention_only": "All attention layers: q_proj, k_proj, v_proj, w_o",
+            "ffn_only": f"All FFN layers: {ffn_desc}",
+            "all": f"Attention + FFN (maximum adaptation capability)",
+            "custom": "Specify target modules manually"
+        }
 
     return presets
 

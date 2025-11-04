@@ -187,7 +187,7 @@ class MultiQueryAttention(nn.Module):
 
 
 class GroupedQueryAttention(nn.Module):
-    """Grouped Query Attention"""
+    """Grouped Query Attention with optional sliding window"""
     def __init__(self, config):
         super().__init__()
         self.d_model = config.d_model
@@ -196,6 +196,7 @@ class GroupedQueryAttention(nn.Module):
         self.n_kv_groups = config.n_kv_groups
         self.d_k = config.d_k
         self.dropout = config.dropout
+        self.sliding_window = config.sliding_window
 
         self.q_proj = nn.Linear(self.d_model, self.n_heads * self.d_k, bias=config.attention_bias)
         self.k_proj = nn.Linear(self.d_model, self.n_kv_heads * self.d_k, bias=config.attention_bias)
@@ -235,8 +236,24 @@ class GroupedQueryAttention(nn.Module):
         k = repeat_kv(k, self.n_kv_groups)
         v = repeat_kv(v, self.n_kv_groups)
 
+        # Create attention mask for sliding window if specified
+        attn_mask = None
+        if self.sliding_window is not None and self.sliding_window > 0:
+            # Create sliding window mask: each position can only attend to
+            # previous sliding_window positions
+            attn_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
+            attn_mask = torch.triu(attn_mask, diagonal=1)  # Causal mask
+            # Add sliding window constraint
+            for i in range(seq_len):
+                if i > self.sliding_window:
+                    attn_mask[i, :i-self.sliding_window] = True  # Mask positions beyond window
+            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
+
         attn_output = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
+            q, k, v,
+            attn_mask=attn_mask,
+            is_causal=(attn_mask is None),  # Use is_causal only if no custom mask
+            dropout_p=self.dropout if self.training else 0.0
         )
 
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
@@ -281,6 +298,244 @@ class StandardFFN(nn.Module):
 
     def forward(self, x):
         return self.linear2(self.dropout(self.activation(self.linear1(x))))
+
+
+# ============================================================================
+# MAMBA2 SSM BLOCK
+# ============================================================================
+
+class Mamba2(nn.Module):
+    """
+    Custom Mamba2 State Space Model implementation in pure PyTorch
+
+    This is a self-contained implementation that doesn't require the mamba-ssm package.
+    It uses standard PyTorch operations and runs on GPU efficiently.
+
+    Architecture:
+    - Input projection with expansion
+    - 1D causal convolution for local context
+    - Selective SSM (State Space Model) with learned dynamics
+    - Gated activation (SiLU)
+    - Output projection
+
+    Reference: https://arxiv.org/abs/2405.21060
+    """
+    def __init__(
+        self,
+        d_model: int,
+        d_state: int = 16,
+        d_conv: int = 4,
+        expand: int = 2,
+        headdim: int = 64,
+        ngroups: int = 1,
+        chunk_size: int = 256,
+        dt_rank: int = None,
+        dt_min: float = 0.001,
+        dt_max: float = 0.1,
+    ):
+        super().__init__()
+        self.d_model = d_model
+        self.d_state = d_state
+        self.d_conv = d_conv
+        self.expand = expand
+        self.d_inner = int(self.expand * self.d_model)
+        self.headdim = headdim
+        self.ngroups = ngroups
+
+        # Compute dt_rank (rank of delta projection)
+        if dt_rank is None:
+            self.dt_rank = math.ceil(self.d_model / 16)
+        else:
+            self.dt_rank = dt_rank
+
+        # Input projection: d_model -> d_inner * 2 (for gating)
+        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=False)
+
+        # Convolutional layer for local dependencies
+        self.conv1d = nn.Conv1d(
+            in_channels=self.d_inner,
+            out_channels=self.d_inner,
+            kernel_size=d_conv,
+            groups=self.d_inner,  # Depthwise convolution
+            padding=d_conv - 1,  # Causal padding
+            bias=True
+        )
+
+        # SSM parameters
+        # A: State transition matrix (fixed, initialized with special properties)
+        A = torch.randn(self.d_inner, self.d_state)
+        self.A_log = nn.Parameter(torch.log(A))  # Log-space for numerical stability
+
+        # D: Skip connection parameter
+        self.D = nn.Parameter(torch.ones(self.d_inner))
+
+        # Time-step projection (delta)
+        self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True)
+
+        # Initialize dt_proj with special initialization for stability
+        dt_init_std = self.dt_rank ** -0.5
+        nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
+
+        # Initialize dt bias to produce values between dt_min and dt_max
+        dt = torch.exp(
+            torch.rand(self.d_inner) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min)
+        )
+        inv_dt = dt + torch.log(-torch.expm1(-dt))
+        with torch.no_grad():
+            self.dt_proj.bias.copy_(inv_dt)
+
+        # X projection to dt_rank
+        self.x_proj = nn.Linear(self.d_inner, self.dt_rank, bias=False)
+
+        # B and C projections (input-dependent SSM parameters)
+        self.B_proj = nn.Linear(self.d_inner, self.d_state, bias=False)
+        self.C_proj = nn.Linear(self.d_inner, self.d_state, bias=False)
+
+        # Output projection
+        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=False)
+
+    def forward(self, x):
+        """
+        Forward pass
+
+        Args:
+            x: (batch, seq_len, d_model)
+
+        Returns:
+            output: (batch, seq_len, d_model)
+        """
+        batch_size, seq_len, _ = x.shape
+
+        # Input projection with gating
+        xz = self.in_proj(x)  # (batch, seq_len, d_inner * 2)
+        x_input, z = xz.chunk(2, dim=-1)  # Each is (batch, seq_len, d_inner)
+
+        # 1D Convolution (causal)
+        x_conv = self.conv1d(x_input.transpose(1, 2))[..., :seq_len].transpose(1, 2)
+        x_conv = F.silu(x_conv)  # Activation after conv
+
+        # Selective SSM
+        # Compute time-step delta
+        x_dt = self.x_proj(x_conv)  # (batch, seq_len, dt_rank)
+        dt = self.dt_proj(x_dt)  # (batch, seq_len, d_inner)
+        dt = F.softplus(dt)  # Ensure positive time-steps
+
+        # Compute input-dependent B and C
+        B = self.B_proj(x_conv)  # (batch, seq_len, d_state)
+        C = self.C_proj(x_conv)  # (batch, seq_len, d_state)
+
+        # Get A from log-space
+        A = -torch.exp(self.A_log)  # (d_inner, d_state)
+
+        # Selective scan (sequential implementation)
+        y = self._selective_scan(x_conv, dt, A, B, C)
+
+        # Skip connection (like residual)
+        y = y + self.D.unsqueeze(0).unsqueeze(0) * x_conv
+
+        # Gating with z
+        y = y * F.silu(z)
+
+        # Output projection
+        output = self.out_proj(y)
+
+        return output
+
+    def _selective_scan(self, x, dt, A, B, C):
+        """
+        Selective scan implementation (sequential for correctness)
+
+        Args:
+            x: (batch, seq_len, d_inner) - input sequence
+            dt: (batch, seq_len, d_inner) - time-step deltas
+            A: (d_inner, d_state) - state transition matrix
+            B: (batch, seq_len, d_state) - input matrix
+            C: (batch, seq_len, d_state) - output matrix
+
+        Returns:
+            y: (batch, seq_len, d_inner) - output sequence
+        """
+        batch_size, seq_len, d_inner = x.shape
+        d_state = A.shape[1]
+
+        # Initialize state
+        h = torch.zeros(batch_size, d_inner, d_state, device=x.device, dtype=x.dtype)
+
+        # Output buffer
+        y = torch.zeros_like(x)
+
+        # Sequential scan (not optimized but correct)
+        for t in range(seq_len):
+            # Discretize A using dt: A_discrete = exp(dt * A)
+            # For numerical stability, use A_discrete ≈ (1 + dt * A)
+            dt_t = dt[:, t, :].unsqueeze(-1)  # (batch, d_inner, 1)
+            A_t = A.unsqueeze(0)  # (1, d_inner, d_state)
+
+            # Discretized state transition: h = A_discrete * h + B * x
+            # Simplified: h = h + dt * (A * h + B * x)
+            B_t = B[:, t, :].unsqueeze(1)  # (batch, 1, d_state)
+            x_t = x[:, t, :].unsqueeze(-1)  # (batch, d_inner, 1)
+
+            # State update: h_new = h * exp(dt * A) + B * x * dt
+            # Approximation: h_new ≈ h + dt * A * h + dt * B * x
+            dh_state = dt_t * (A_t * h)  # (batch, d_inner, d_state)
+            dh_input = dt_t * (B_t * x_t)  # (batch, d_inner, d_state)
+            h = h + dh_state + dh_input
+
+            # Output: y = C * h
+            C_t = C[:, t, :].unsqueeze(1)  # (batch, 1, d_state)
+            y_t = (C_t * h).sum(dim=-1)  # (batch, d_inner)
+            y[:, t, :] = y_t
+
+        return y
+
+
+class Mamba2Block(nn.Module):
+    """
+    Mamba2 State Space Model block with normalization and residual connection
+
+    Uses official mamba-ssm library for optimized CUDA kernels.
+    Much more memory efficient than custom PyTorch implementation.
+    """
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        # Normalization before Mamba2 (pre-norm architecture)
+        NormClass = NORM_TYPES[config.norm_type]
+        self.norm = NormClass(config.d_model, eps=config.norm_eps)
+
+        # Use official mamba-ssm implementation
+        try:
+            from mamba_ssm import Mamba2 as Mamba2Official
+        except ImportError:
+            raise ImportError(
+                "mamba-ssm package not found. Install with:\n"
+                "pip install mamba-ssm>=2.0.0 causal-conv1d>=1.2.0"
+            )
+
+        self.mamba = Mamba2Official(
+            d_model=config.d_model,
+            d_state=config.state_size,
+            d_conv=config.conv_kernel_size,
+            expand=config.expand_factor,
+            headdim=64,
+            ngroups=1,
+            chunk_size=256,
+        )
+
+    def forward(self, x):
+        """
+        Forward pass with residual connection
+
+        Args:
+            x: (batch, seq_len, d_model)
+
+        Returns:
+            x: (batch, seq_len, d_model)
+        """
+        # Pre-norm with residual connection
+        return x + self.mamba(self.norm(x))
 
 
 # ============================================================================

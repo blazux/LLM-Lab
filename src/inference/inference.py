@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch.amp import autocast
 
-from model import TransformerLLM
+from model.factory import build_model
 from data import load_tokenizer
 
 
@@ -31,7 +31,7 @@ def load_model_for_inference(checkpoint_path: str):
         print(f"   This indicates a tokenizer mismatch. Generation quality may be poor.")
         print(f"   Check that tokenizer_name in config matches the one used during training.")
 
-    model = TransformerLLM(model_config)
+    model = build_model(model_config)
     model.load_state_dict(checkpoint['model_state_dict'])
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

@@ -9,7 +9,7 @@ import os
 from tqdm import tqdm
 
 from config import ModelConfig, SFTConfig
-from model import TransformerLLM
+from model.factory import build_model
 from data import load_tokenizer, create_sft_dataset, sft_collate_fn
 from optimizers import setup_optimizer
 
@@ -242,8 +242,8 @@ def train_sft(config: SFTConfig):
     )
 
     # Initialize model
-    print("\n🔧 Building model...")
-    model = TransformerLLM(model_config)
+    print(f"\n🔧 Building {model_config.model_architecture} model...")
+    model = build_model(model_config)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load model weights
