@@ -32,7 +32,7 @@ pip install mamba-ssm>=2.0.0 causal-conv1d>=1.2.0
 
 **Using the CLI (Recommended):**
 ```bash
-python src/cli.py
+./llm-lab.sh
 # Choose option 1: Configure new model
 # Select architecture: mamba2
 # Configure your model parameters
@@ -52,26 +52,21 @@ Key parameters:
 
 ### 2. Train a Mamba2 Model
 
-**Base pretraining:**
 ```bash
-python src/cli.py train --config training_config.json
+./llm-lab.sh
+# Choose option 2: Base training
+# Select your Mamba2 model config when prompted
 ```
 
-When prompted for model config, provide your Mamba2 config path.
-
-**Or modify training_config.json:**
-```json
-{
-  "model_config_path": "model_config_mamba2.json",
-  "max_steps": 100000,
-  ...
-}
-```
+Mamba2 follows the same training pipeline as Transformers!
 
 ### 3. Supervised Fine-Tuning (SFT)
 
 ```bash
-python src/cli.py sft --config sft_config.json
+./llm-lab.sh
+# Choose option 3: SFT training
+# Select your pretrained Mamba2 checkpoint
+# Configure SFT settings
 ```
 
 Mamba2 works with the same SFT pipeline as transformers!
@@ -84,13 +79,19 @@ Mamba2 supports all RLHF algorithms:
 - GRPO (Group Relative Policy Optimization)
 
 ```bash
-python src/cli.py rlhf --mode ppo --config rlhf_config.json
+./llm-lab.sh
+# Choose option 4: RLHF training
+# Select algorithm (PPO, DPO, or GRPO)
+# Configure RLHF settings
 ```
 
 ### 5. Inference
 
 ```bash
-python src/cli.py inference --checkpoint mamba2_checkpoints/best_model.pt
+./llm-lab.sh
+# Choose option 6: Model inference
+# Select your trained Mamba2 checkpoint
+# Start chatting with your model!
 ```
 
 The inference interface is identical to transformer models!
