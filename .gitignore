@@ -4,9 +4,9 @@ cache/
 checkpoints/*
 sft_checkpoints/*
 rlhf_checkpoints/*
+# Ignore user-specific config files but keep examples
 model_config.json
 training_config.json
 sft_config.json
 rlhf_config.json
 sft_config_bilingual.json
-model_config_mamba2.json

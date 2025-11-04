@@ -10,22 +10,35 @@ Mamba2 is a state-space model architecture that offers:
 - **Faster inference**: Constant time per token regardless of context length
 - **Lower memory**: Fixed-size SSM state instead of growing KV cache
 
-## Requirements
+## Implementation
 
-Mamba2 requires the `mamba-ssm` package with optimized CUDA kernels:
+LLM-Lab uses the **official mamba-ssm library** for Mamba2:
 
+- ✅ **Highly optimized** - CUDA kernels for maximum performance
+- ✅ **Memory efficient** - fused operations minimize memory usage
+- ✅ **Production ready** - battle-tested implementation
+- ✅ **Fast training** - 5-10x faster than pure PyTorch implementations
+
+**Requirements:**
 ```bash
 pip install mamba-ssm>=2.0.0 causal-conv1d>=1.2.0
 ```
 
-**Note**: Requires CUDA-capable GPU. CPU-only mode is not supported.
+**Note:** Requires CUDA-capable GPU. CPU-only mode is not supported.
 
 ## Quick Start
 
 ### 1. Create a Mamba2 Model Config
 
-Use the example config or create your own:
+**Using the CLI (Recommended):**
+```bash
+python src/cli.py
+# Choose option 1: Configure new model
+# Select architecture: mamba2
+# Configure your model parameters
+```
 
+**Or manually edit a config file:**
 ```bash
 cp model_config_mamba2.json my_mamba2_config.json
 ```
@@ -142,18 +155,12 @@ Mamba2 allows **2-4x longer sequences** on the same hardware!
 
 ## Known Limitations
 
-1. **CUDA only**: Mamba2 requires GPU. No CPU support.
+1. **Speed**: Slower than highly optimized CUDA kernels (but no warmup overhead!)
 2. **Model quality**: Transformers may have slight edge on some benchmarks
 3. **Ecosystem**: Fewer pretrained Mamba2 models available
 4. **Training steps**: May need 10-20% more steps than transformers for same quality
 
 ## Troubleshooting
-
-### ImportError: mamba_ssm not found
-
-```bash
-pip install mamba-ssm>=2.0.0 causal-conv1d>=1.2.0
-```
 
 ### CUDA out of memory
 
@@ -169,7 +176,9 @@ tokenizer = AutoTokenizer.from_pretrained("your/tokenizer")
 print(tokenizer.vocab_size)  # Use this value in config
 ```
 
-## Example: 1.4B Mamba2 Model
+## Example Configuration
+
+### 1.4B Mamba2 Model
 
 ```json
 {

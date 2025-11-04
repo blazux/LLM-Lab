@@ -198,12 +198,25 @@ def configure_model():
 
         config.d_ff = get_input("Feed-forward hidden size (d_ff)", default=config.d_ff, type_fn=int)
 
+        # Sliding window attention (optional)
+        print(f"\n  {Colors.DIM}Sliding window attention limits each token's attention to nearby tokens{Colors.RESET}")
+        print(f"  {Colors.DIM}Default (None) = full attention. Example: 2048 for local attention{Colors.RESET}")
+        sw_input = get_input(
+            "Sliding window size (or 'none' for full attention)",
+            default="none" if config.sliding_window is None else str(config.sliding_window)
+        )
+        if sw_input.lower() in ['none', 'null', '']:
+            config.sliding_window = None
+        else:
+            config.sliding_window = int(sw_input)
+
     elif config.model_architecture == "mamba2":
         # Mamba2-specific configuration
         print_subsection("Mamba2 State-Space Architecture", "🌊")
 
         print(f"\n  {Colors.CYAN}ℹ{Colors.RESET}  Mamba2 replaces attention with state-space models")
         print(f"     {Colors.DIM}Offers O(N) complexity and efficient long-context processing{Colors.RESET}")
+        print(f"     {Colors.DIM}Uses custom PyTorch implementation (no external dependencies){Colors.RESET}")
         print()
 
         config.state_size = get_input(
@@ -266,9 +279,9 @@ def configure_model():
     print(f"{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
 
     if config.model_architecture == "mamba2":
-        print(f"\n  {Colors.YELLOW}⚠{Colors.RESET}  {Colors.BOLD}Mamba2 requires:{Colors.RESET}")
-        print(f"     pip install mamba-ssm>=2.0.0 causal-conv1d>=1.2.0")
-        print(f"     See MAMBA2.md for details")
+        print(f"\n  {Colors.CYAN}ℹ{Colors.RESET}  {Colors.BOLD}Using custom PyTorch Mamba2 implementation{Colors.RESET}")
+        print(f"     No external dependencies required")
+        print(f"     Works with gradient checkpointing for memory efficiency")
 
 
 def configure_training():

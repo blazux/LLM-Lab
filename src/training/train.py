@@ -175,16 +175,19 @@ def train_model(
     print(f"\n🔧 Building {model_config.model_architecture} model...")
     model = build_model(model_config)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
+
+    # Cast model to bfloat16 for memory efficiency (reduces memory usage by 50%)
+    model = model.to(device=device, dtype=torch.bfloat16)
 
     total_params = model.count_parameters()
     print(f"   Total parameters: {total_params:,}")
+    print(f"   Model dtype: {next(model.parameters()).dtype}")
 
     # Setup optimizers
     optimizers = setup_optimizer(model, train_config)
 
-    # Setup gradient scaler for bfloat16
-    scaler = GradScaler()
+    # Note: GradScaler is NOT used with bfloat16 (only needed for float16)
+    # BFloat16 has same exponent range as float32, so no gradient scaling needed
 
     # Load checkpoint if provided
     start_step = 0
@@ -197,7 +200,7 @@ def train_model(
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
         model.load_state_dict(checkpoint['model_state_dict'])
-        model.to(device)
+        model = model.to(device=device, dtype=torch.bfloat16)
 
         start_step = checkpoint.get('step', 0)
         total_tokens_seen = checkpoint.get('total_tokens_seen', 0)
@@ -327,28 +330,27 @@ def train_model(
             total_tokens_seen += tokens_in_batch
 
             # Forward pass with bfloat16
+            # Gradient checkpointing: only for transformers, not for Mamba2
+            # Mamba2's sequential scan + checkpointing recomputation uses more memory
+            use_checkpoint = (model_config.model_architecture == "transformer")
             with autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = model(x, use_checkpoint=True)
+                logits = model(x, use_checkpoint=use_checkpoint)
                 loss = F.cross_entropy(logits.view(-1, model_config.vocab_size), y.view(-1))
                 loss = loss / train_config.gradient_accumulation_steps
 
-            scaler.scale(loss).backward()
+            # No gradient scaling needed for bfloat16 (unlike float16)
+            loss.backward()
 
             # Optimizer step after accumulation
             if (step + 1) % train_config.gradient_accumulation_steps == 0:
-                for optimizer in optimizers:
-                    scaler.unscale_(optimizer)
-
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     model.parameters(),
                     train_config.grad_clip
                 )
 
                 for optimizer in optimizers:
-                    scaler.step(optimizer)
+                    optimizer.step()
                     optimizer.zero_grad()
-
-                scaler.update()
 
             # Step scheduler every iteration (not just after gradient accumulation)
             for scheduler in schedulers:
