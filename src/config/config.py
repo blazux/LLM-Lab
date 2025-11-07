@@ -30,6 +30,10 @@ class ModelConfig:
     sliding_window: Optional[int] = None
     attention_bias: bool = False
 
+    # MLA-specific parameters (Multi-Head Latent Attention)
+    d_latent: Optional[int] = None  # Latent dimension for KV compression (e.g., d_model // 4)
+    d_rope_latent: Optional[int] = None  # Separate latent dim for RoPE (optional)
+
     # Mamba2-specific parameters (optional for Transformer)
     state_size: int = 16  # SSM state dimension (d_state)
     expand_factor: int = 2  # Expansion ratio for Mamba2
@@ -55,6 +59,15 @@ class ModelConfig:
             self.d_k = self.d_model // self.n_heads
             if self.attention_type == "gqa":
                 self.n_kv_groups = self.n_heads // self.n_kv_heads
+
+            # MLA-specific validation and defaults
+            if self.attention_type == "mla":
+                # Set default latent dimension to d_model // 4 if not specified
+                if self.d_latent is None:
+                    self.d_latent = max(self.d_model // 4, self.d_k)
+                # Set default RoPE latent dimension (typically same as d_k)
+                if self.d_rope_latent is None:
+                    self.d_rope_latent = self.d_k
 
         elif self.model_architecture == "mamba2":
             # Mamba2-specific validation
@@ -91,6 +104,14 @@ class ModelConfig:
                 attn_params = 4 * self.d_model * self.d_model
             elif self.attention_type == "mqa":
                 attn_params = self.d_model * self.d_model + 2 * self.d_model * self.d_k + self.d_model * self.d_model
+            elif self.attention_type == "mla":
+                # MLA: Q projection + KV down-projection + KV up-projections + output projection
+                q_params = self.d_model * self.d_model
+                kv_down_params = self.d_model * self.d_latent
+                k_up_params = self.d_latent * self.d_model
+                v_up_params = self.d_latent * self.d_model
+                out_params = self.d_model * self.d_model
+                attn_params = q_params + kv_down_params + k_up_params + v_up_params + out_params
             else:  # gqa
                 attn_params = self.d_model * self.d_model + 2 * self.n_kv_heads * self.d_k * self.d_model + self.d_model * self.d_model
 

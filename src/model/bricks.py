@@ -260,6 +260,148 @@ class GroupedQueryAttention(nn.Module):
         return self.w_o(attn_output)
 
 
+class MultiHeadLatentAttention(nn.Module):
+    """
+    Multi-Head Latent Attention (MLA)
+
+    Compresses KV representations through a low-rank latent bottleneck
+    to reduce KV cache size while maintaining quality. Used in DeepSeek-V2/V3.
+
+    Architecture:
+    - Q: Standard projection (d_model -> n_heads * d_k)
+    - K/V: Compressed path
+      1. Down-project: d_model -> d_latent (compression)
+      2. Up-project: d_latent -> n_heads * d_k (expansion)
+
+    Benefits:
+    - Reduced KV cache: ~4x smaller than MHA
+    - Parameter efficient: Similar to GQA
+    - Quality: Can match MHA with proper d_latent tuning
+
+    Reference: DeepSeek-V2 (https://arxiv.org/abs/2405.04434)
+    """
+    def __init__(self, config):
+        super().__init__()
+        self.d_model = config.d_model
+        self.n_heads = config.n_heads
+        self.d_k = config.d_k
+        self.d_latent = config.d_latent
+        self.dropout = config.dropout
+        self.positional_encoding = config.positional_encoding
+
+        # Standard Q projection
+        self.q_proj = nn.Linear(self.d_model, self.n_heads * self.d_k, bias=config.attention_bias)
+
+        # Latent compression for KV
+        # Shared down-projection for both K and V
+        self.kv_down = nn.Linear(self.d_model, self.d_latent, bias=False)
+
+        # K and V up-projections depend on whether we're using RoPE/YARN
+        # For RoPE/YARN: split K into RoPE and non-RoPE components (DeepSeek-V2 style)
+        # For other encodings: standard projection
+        if self.positional_encoding in ["rope", "yarn"]:
+            self.d_rope_latent = config.d_rope_latent
+            # Split K into RoPE and non-RoPE components
+            self.k_rope_proj = nn.Linear(self.d_latent, self.n_heads * self.d_rope_latent, bias=False)
+            self.k_nope_proj = nn.Linear(self.d_latent, self.n_heads * (self.d_k - self.d_rope_latent), bias=False)
+        else:
+            # Standard K projection for sinusoidal/alibi
+            self.d_rope_latent = None
+            self.k_proj = nn.Linear(self.d_latent, self.n_heads * self.d_k, bias=False)
+
+        # V projection (always standard)
+        self.v_proj = nn.Linear(self.d_latent, self.n_heads * self.d_k, bias=False)
+
+        # Output projection
+        self.w_o = nn.Linear(self.n_heads * self.d_k, self.d_model, bias=False)
+
+        # QK normalization (important for stability)
+        if config.norm_type == "rmsnorm":
+            self.q_norm = nn.RMSNorm(self.d_k, eps=config.norm_eps)
+            self.k_norm = nn.RMSNorm(self.d_k, eps=config.norm_eps)
+        else:
+            self.q_norm = nn.LayerNorm(self.d_k, eps=config.norm_eps)
+            self.k_norm = nn.LayerNorm(self.d_k, eps=config.norm_eps)
+
+        self.pos_encoding = None
+
+    def forward(self, x):
+        batch_size, seq_len = x.size(0), x.size(1)
+
+        # Q: Standard projection
+        q = self.q_proj(x).view(batch_size, seq_len, self.n_heads, self.d_k)
+
+        # K/V: Compress through latent bottleneck
+        latent = self.kv_down(x)  # (batch, seq, d_latent)
+
+        # V: Standard up-projection (always the same)
+        v = self.v_proj(latent).view(batch_size, seq_len, self.n_heads, self.d_k)
+
+        # K projection depends on positional encoding type
+        if self.positional_encoding in ["rope", "yarn"]:
+            # Split K into RoPE and non-RoPE components (DeepSeek-V2 style)
+            k_rope = self.k_rope_proj(latent).view(batch_size, seq_len, self.n_heads, self.d_rope_latent)
+            k_nope = self.k_nope_proj(latent).view(batch_size, seq_len, self.n_heads, self.d_k - self.d_rope_latent)
+
+            # Apply QK normalization before RoPE
+            q = self.q_norm(q)
+
+            # Transpose to (batch, n_heads, seq_len, d_k)
+            q = q.transpose(1, 2)
+            k_rope = k_rope.transpose(1, 2)
+            k_nope = k_nope.transpose(1, 2)
+            v = v.transpose(1, 2)
+
+            # Apply RoPE to Q and K_rope components
+            if self.pos_encoding is not None and isinstance(self.pos_encoding, (RoPE, YARN)):
+                # Split Q into RoPE and non-RoPE parts
+                q_rope = q[..., :self.d_rope_latent]
+                q_nope = q[..., self.d_rope_latent:]
+
+                # Apply RoPE
+                q_rope = self.pos_encoding(q_rope)
+                k_rope = self.pos_encoding(k_rope)
+
+                # Recombine Q
+                q = torch.cat([q_rope, q_nope], dim=-1)
+
+            # Concatenate K components
+            k = torch.cat([k_rope, k_nope], dim=-1)
+
+        else:
+            # Standard path for sinusoidal/alibi (no RoPE splitting)
+            k = self.k_proj(latent).view(batch_size, seq_len, self.n_heads, self.d_k)
+
+            # Apply QK normalization
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+
+            # Transpose to (batch, n_heads, seq_len, d_k)
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
+
+            # Note: Sinusoidal is added to embeddings, ALiBi is handled via attention bias
+            # Neither requires special handling in attention mechanism
+
+        # Apply K normalization (for RoPE path, needs to be after concat)
+        if self.positional_encoding in ["rope", "yarn"]:
+            k = k.transpose(1, 2)  # Back to (batch, seq_len, n_heads, d_k)
+            k = self.k_norm(k)
+            k = k.transpose(1, 2)  # Back to (batch, n_heads, seq_len, d_k)
+
+        # Scaled dot-product attention (uses Flash Attention via PyTorch)
+        attn_output = F.scaled_dot_product_attention(
+            q, k, v,
+            is_causal=True,
+            dropout_p=self.dropout if self.training else 0.0
+        )
+
+        # Reshape and project output
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.n_heads * self.d_k)
+        return self.w_o(attn_output)
+
+
 # ============================================================================
 # FEED-FORWARD ACTIVATIONS
 # ============================================================================
@@ -552,7 +694,8 @@ POSITIONAL_ENCODINGS = {
 ATTENTION_TYPES = {
     'mha': MultiHeadAttention,
     'mqa': MultiQueryAttention,
-    'gqa': GroupedQueryAttention
+    'gqa': GroupedQueryAttention,
+    'mla': MultiHeadLatentAttention
 }
 
 NORM_TYPES = {
