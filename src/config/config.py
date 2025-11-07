@@ -35,11 +35,14 @@ class ModelConfig:
     d_rope_latent: Optional[int] = None  # Separate latent dim for RoPE (optional)
 
     # Mamba2-specific parameters (optional for Transformer)
-    state_size: int = 16  # SSM state dimension (d_state)
+    state_size: int = 64  # SSM state dimension (d_state) - 16=minimal, 64=balanced, 128=optimal
     expand_factor: int = 2  # Expansion ratio for Mamba2
     dt_rank: Optional[int] = None  # Rank for Δ (time step) - auto if None
     conv_kernel_size: int = 4  # Convolution kernel size
     use_bias: bool = True  # Whether to use bias in projections
+    headdim: int = 64  # Head dimension for Mamba2 (64 or 128)
+    ngroups: int = 1  # Number of groups for Mamba2 (1=no grouping, 8=efficient)
+    chunk_size: int = 256  # Chunk size for Mamba2 processing
 
     # PEFT compatibility attributes
     tie_word_embeddings: bool = True  # We do tie embeddings in model.py

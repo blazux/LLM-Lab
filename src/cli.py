@@ -41,7 +41,7 @@ def print_header():
 
 def print_menu():
     """Print main menu with enhanced styling and descriptions"""
-    print(f"\n{Colors.BOLD}{Colors.WHITE}┌─ Main Menu {'─' * 64}┐{Colors.RESET}\n")
+    print(f"\n{Colors.BOLD}{Colors.WHITE}┌─ Main Menu {'─' * 67}┐{Colors.RESET}\n")
 
     # Model Setup Section
     print(f"{Colors.BOLD}{Colors.YELLOW}  ⚙️  MODEL SETUP{Colors.RESET}")
@@ -67,8 +67,8 @@ def print_menu():
     print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}5.{Colors.RESET} {Colors.BOLD}Merge LoRA adapters{Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Merge parameter-efficient LoRA weights back into base model{Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}")
-    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}6.{Colors.RESET} {Colors.BOLD}Test model{Colors.RESET} {Colors.DIM}(interactive inference){Colors.RESET}")
-    print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Chat with your trained model in real-time{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}6.{Colors.RESET} {Colors.BOLD}Test model{Colors.RESET} {Colors.DIM}(inference){Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Test your self-trained model{Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}7.{Colors.RESET} {Colors.BOLD}Exit{Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Close the application{Colors.RESET}")

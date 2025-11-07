@@ -661,9 +661,9 @@ class Mamba2Block(nn.Module):
             d_state=config.state_size,
             d_conv=config.conv_kernel_size,
             expand=config.expand_factor,
-            headdim=64,
-            ngroups=1,
-            chunk_size=256,
+            headdim=config.headdim,
+            ngroups=config.ngroups,
+            chunk_size=config.chunk_size,
         )
 
     def forward(self, x):
