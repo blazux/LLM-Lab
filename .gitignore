@@ -1,6 +1,7 @@
 __pycache__/
 cache/
 .vscode/
+.claude/
 checkpoints/*
 sft_checkpoints/*
 rlhf_checkpoints/*

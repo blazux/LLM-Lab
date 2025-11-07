@@ -35,7 +35,7 @@ def print_header():
     """Print CLI header with enhanced styling"""
     print(f"\n{Colors.BOLD}{Colors.CYAN}{'═' * 80}{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.PURPLE}{'🧠  L L M - L A B O R A T O R Y':^88}{Colors.RESET}")
-    print(f"{Colors.DIM}{'Train, fine-tune, and deploy custom language models':^80}{Colors.RESET}")
+    print(f"{Colors.DIM}{'Train, fine-tune, and test custom language models':^80}{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.CYAN}{'═' * 80}{Colors.RESET}\n")
 
 
