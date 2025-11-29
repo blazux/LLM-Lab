@@ -13,6 +13,23 @@ from model.factory import build_model
 from optimizers import setup_optimizer
 from data import StreamingTokenDataset, lm_collate_fn, load_tokenizer, create_token_stream
 
+# Global stop flag for graceful training termination
+_stop_requested = False
+
+def request_stop():
+    """Request graceful stop of training"""
+    global _stop_requested
+    _stop_requested = True
+
+def reset_stop_flag():
+    """Reset the stop flag (called at start of training)"""
+    global _stop_requested
+    _stop_requested = False
+
+def is_stop_requested():
+    """Check if stop has been requested"""
+    return _stop_requested
+
 
 def get_trend_indicator(current, previous):
     """Get trend indicator arrow for metrics
@@ -142,7 +159,8 @@ def train_model(
     checkpoint_path: str = None,
     output_dir: str = "checkpoints",
     additional_steps: int = 0,
-    load_optimizer_state: bool = True
+    load_optimizer_state: bool = True,
+    callback: callable = None
 ):
     """Main training function
 
@@ -153,12 +171,15 @@ def train_model(
         output_dir: Directory to save checkpoints
         additional_steps: Additional steps to train beyond checkpoint (0 = use config max_steps)
         load_optimizer_state: Whether to load optimizer/scheduler state from checkpoint (set False when switching optimizers)
+        callback: Optional callback object with on_step(step, loss, lr, ppl) and on_log(message, level) methods
     """
 
     os.makedirs(output_dir, exist_ok=True)
 
     # Load tokenizer and create data streams
     print("\n📚 Loading tokenizer and datasets...")
+    if callback and hasattr(callback, 'on_log'):
+        callback.on_log("Loading tokenizer and datasets...", "info")
     tokenizer = load_tokenizer(model_config.tokenizer_name)
 
     # Validate vocab_size matches tokenizer
@@ -173,6 +194,8 @@ def train_model(
 
     # Initialize model
     print(f"\n🔧 Building {model_config.model_architecture} model...")
+    if callback and hasattr(callback, 'on_log'):
+        callback.on_log(f"Building {model_config.model_architecture} model...", "info")
     model = build_model(model_config)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -182,6 +205,8 @@ def train_model(
     total_params = model.count_parameters()
     print(f"   Total parameters: {total_params:,}")
     print(f"   Model dtype: {next(model.parameters()).dtype}")
+    if callback and hasattr(callback, 'on_log'):
+        callback.on_log(f"Model initialized: {total_params:,} parameters", "info")
 
     # Setup optimizers
     optimizers = setup_optimizer(model, train_config)
@@ -308,6 +333,12 @@ def train_model(
 
     # Training loop
     print(f"\n🚀 Starting training from step {start_step}...")
+    if callback and hasattr(callback, 'on_log'):
+        callback.on_log(f"Starting training from step {start_step}...", "success")
+
+    # Reset stop flag at start of training
+    reset_stop_flag()
+
     model.train()
     step = start_step
     start_time = time.time()
@@ -323,6 +354,13 @@ def train_model(
     while step < target_steps:
         for batch_idx, (x, y) in enumerate(train_loader):
             if step >= target_steps:
+                break
+
+            # Check for stop request
+            if is_stop_requested():
+                print(f"\n⏹️  Stop requested at step {step}. Saving checkpoint...")
+                if callback and hasattr(callback, 'on_log'):
+                    callback.on_log(f"Training stopped by user at step {step}", "warning")
                 break
 
             x, y = x.to(device), y.to(device)
@@ -363,13 +401,18 @@ def train_model(
                     accuracy = (predictions == y).float().mean().item()
                     current_loss = loss.item() * train_config.gradient_accumulation_steps
                     perplexity = math.exp(min(current_loss, 20))
+                    current_lr = optimizers[0].param_groups[0]['lr']
 
                 pbar.set_postfix({
                     'loss': f'{current_loss:.4f}',
                     'acc': f'{accuracy:.3f}',
                     'ppl': f'{perplexity:.1f}',
-                    'lr': f'{optimizers[0].param_groups[0]["lr"]:.2e}'
+                    'lr': f'{current_lr:.2e}'
                 })
+
+                # Callback for metrics
+                if callback and hasattr(callback, 'on_step'):
+                    callback.on_step(step, current_loss, current_lr, perplexity)
 
             # Evaluation
             if step % train_config.eval_every == 0 and step > 0:
@@ -387,6 +430,14 @@ def train_model(
                       f"Val Loss {eval_metrics['val_loss']:.4f} {val_loss_trend}{best_marker} | "
                       f"Val Acc {eval_metrics['val_accuracy']:.1%} {val_acc_trend} | "
                       f"Val PPL {eval_metrics['val_perplexity']:.1f}")
+
+                # Callback for evaluation
+                if callback and hasattr(callback, 'on_log'):
+                    callback.on_log(f"Step {step}: Val Loss={eval_metrics['val_loss']:.4f}, Val PPL={eval_metrics['val_perplexity']:.1f}", "info")
+
+                # Callback for eval metrics
+                if callback and hasattr(callback, 'on_eval'):
+                    callback.on_eval(step, eval_metrics['val_loss'], eval_metrics['val_perplexity'])
 
                 # Update previous values
                 prev_val_loss = eval_metrics['val_loss']
@@ -413,6 +464,10 @@ def train_model(
                     print(f"\n   ✨ New best validation loss: {best_val_loss:.4f}")
                     print(f"   💾 Best model saved: {output_dir}/best_model.pt")
 
+                    # Callback for checkpoint save
+                    if callback and hasattr(callback, 'on_log'):
+                        callback.on_log(f"New best model saved: val_loss={best_val_loss:.4f}", "success")
+
                 # Always save latest checkpoint
                 if not train_config.save_best_only:
                     torch.save(checkpoint_data, f"{output_dir}/latest_checkpoint.pt")
@@ -420,14 +475,22 @@ def train_model(
             step += 1
             pbar.update(1)
 
+        # Check if we broke out due to stop request
+        if is_stop_requested():
+            break
+
     pbar.close()
 
     # Final evaluation
     print("\n📊 Running final evaluation...")
+    if callback and hasattr(callback, 'on_log'):
+        callback.on_log("Running final evaluation...", "info")
     final_eval = evaluate_model(model, val_loader, train_config, model_config.vocab_size)
     print(f"   Final Loss: {final_eval['val_loss']:.4f}")
     print(f"   Final Accuracy: {final_eval['val_accuracy']:.4f}")
     print(f"   Final Perplexity: {final_eval['val_perplexity']:.2f}")
+    if callback and hasattr(callback, 'on_log'):
+        callback.on_log(f"Training completed! Final Loss={final_eval['val_loss']:.4f}, PPL={final_eval['val_perplexity']:.2f}", "success")
 
     # Save final model
     torch.save({

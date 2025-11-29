@@ -11,3 +11,5 @@ training_config*.json
 training_*.json
 sft_config*.json
 rlhf_config*.json
+model_*.json
+test*.json

@@ -1,0 +1,1250 @@
+import { motion, AnimatePresence } from 'framer-motion';
+import { X } from 'lucide-react';
+import { Node } from 'reactflow';
+
+interface ConfigPanelProps {
+  node: Node | null;
+  onClose: () => void;
+  onUpdate: (nodeId: string, data: any) => void;
+}
+
+const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
+  if (!node) return null;
+
+  const handleChange = (key: string, value: any) => {
+    onUpdate(node.id, {
+      ...node.data,
+      [key]: value,
+    });
+  };
+
+  const renderConfigFields = () => {
+    const type = node.type;
+
+    switch (type) {
+      case 'tokenizer':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Tokenizer Name
+              </label>
+              <input
+                type="text"
+                value={node.data.tokenizer_name || 'Qwen/Qwen2.5-0.5B'}
+                onChange={(e) => handleChange('tokenizer_name', e.target.value)}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                HuggingFace tokenizer identifier
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'embedding':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Model Dimension (d_model)
+              </label>
+              <input
+                type="number"
+                value={node.data.d_model || 896}
+                onChange={(e) => handleChange('d_model', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Hidden size of the model
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Vocabulary Size
+              </label>
+              <input
+                type="number"
+                value={node.data.vocab_size || 151936}
+                onChange={(e) => handleChange('vocab_size', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Number of tokens in the vocabulary
+              </p>
+            </div>
+          </div>
+        );
+
+      // Positional Encoding nodes
+      case 'rope':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Sequence Length
+              </label>
+              <input
+                type="number"
+                value={node.data.max_seq_len || 1024}
+                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum sequence length the model can process
+              </p>
+            </div>
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">RoPE (Rotary Position Embedding) is a modern positional encoding method that applies rotations to query and key vectors.</p>
+            </div>
+          </div>
+        );
+
+      case 'alibi':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Sequence Length
+              </label>
+              <input
+                type="number"
+                value={node.data.max_seq_len || 1024}
+                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum sequence length the model can process
+              </p>
+            </div>
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">ALiBi (Attention with Linear Biases) adds position-dependent biases to attention scores.</p>
+            </div>
+          </div>
+        );
+
+      case 'yarn':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Sequence Length
+              </label>
+              <input
+                type="number"
+                value={node.data.max_seq_len || 1024}
+                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum sequence length the model can process
+              </p>
+            </div>
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">YARN (Yet Another RoPE extensioN) extends RoPE for longer context lengths.</p>
+            </div>
+          </div>
+        );
+
+      case 'sinusoidal':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Sequence Length
+              </label>
+              <input
+                type="number"
+                value={node.data.max_seq_len || 1024}
+                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum sequence length the model can process
+              </p>
+            </div>
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">Sinusoidal positional encoding from the original Transformer paper.</p>
+            </div>
+          </div>
+        );
+
+      // Attention nodes
+      case 'mha':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Number of Heads
+              </label>
+              <input
+                type="number"
+                value={node.data.n_heads || 14}
+                onChange={(e) => handleChange('n_heads', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Multi-Head Attention splits attention into multiple heads for richer representations
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'gqa':
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-medium text-slate-300 mb-2 block">
+                  Heads
+                </label>
+                <input
+                  type="number"
+                  value={node.data.n_heads || 14}
+                  onChange={(e) => handleChange('n_heads', parseInt(e.target.value))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-slate-300 mb-2 block">
+                  KV Heads
+                </label>
+                <input
+                  type="number"
+                  value={node.data.n_kv_heads || 2}
+                  onChange={(e) => handleChange('n_kv_heads', parseInt(e.target.value))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-slate-400">
+              Grouped-Query Attention groups multiple query heads per key/value head for efficiency
+            </p>
+          </div>
+        );
+
+      case 'mqa':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Number of Heads
+              </label>
+              <input
+                type="number"
+                value={node.data.n_heads || 14}
+                onChange={(e) => handleChange('n_heads', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Multi-Query Attention uses a single key/value head shared across all query heads
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'mla':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Number of Heads
+              </label>
+              <input
+                type="number"
+                value={node.data.n_heads || 14}
+                onChange={(e) => handleChange('n_heads', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Multi-head Latent Attention uses compressed latent representations for efficient attention
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Latent Dimension (d_latent)
+              </label>
+              <input
+                type="number"
+                value={node.data.d_latent || ''}
+                onChange={(e) => handleChange('d_latent', e.target.value ? parseInt(e.target.value) : null)}
+                placeholder="Auto (d_model / 4)"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Compressed dimension for KV cache (default: d_model / 4)
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                RoPE Latent Dimension (d_rope_latent)
+              </label>
+              <input
+                type="number"
+                value={node.data.d_rope_latent || ''}
+                onChange={(e) => handleChange('d_rope_latent', e.target.value ? parseInt(e.target.value) : null)}
+                placeholder="Auto (d_model / n_heads)"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Separate latent dimension for RoPE (default: d_model / n_heads)
+              </p>
+            </div>
+          </div>
+        );
+
+      // Normalization nodes
+      case 'rmsnorm':
+        return (
+          <div className="space-y-4">
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">RMSNorm (Root Mean Square Normalization) is a faster alternative to LayerNorm.</p>
+              <p className="text-xs text-slate-400">No additional configuration needed - uses default epsilon value.</p>
+            </div>
+          </div>
+        );
+
+      case 'layernorm':
+        return (
+          <div className="space-y-4">
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">LayerNorm is the classic normalization method from the original Transformer.</p>
+              <p className="text-xs text-slate-400">No additional configuration needed - uses default epsilon value.</p>
+            </div>
+          </div>
+        );
+
+      // FFN nodes
+      case 'swiglu':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Hidden Dimension (d_ff)
+              </label>
+              <input
+                type="number"
+                value={node.data.d_ff || 3584}
+                onChange={(e) => handleChange('d_ff', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                SwiGLU is a modern activation function used in state-of-the-art models
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'gelu':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Hidden Dimension (d_ff)
+              </label>
+              <input
+                type="number"
+                value={node.data.d_ff || 3584}
+                onChange={(e) => handleChange('d_ff', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                GELU (Gaussian Error Linear Unit) is a smooth activation function
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'relu':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Hidden Dimension (d_ff)
+              </label>
+              <input
+                type="number"
+                value={node.data.d_ff || 3584}
+                onChange={(e) => handleChange('d_ff', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-pink-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                ReLU is the classic activation function: max(0, x)
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'lmhead':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Weight Tying
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={node.data.tie_weights ?? true}
+                  onChange={(e) => handleChange('tie_weights', e.target.checked)}
+                  className="w-4 h-4 bg-slate-700 border-slate-600 rounded text-pink-500 focus:ring-2 focus:ring-pink-500"
+                />
+                <span className="text-white text-sm">
+                  Tie weights with embedding layer
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                When enabled, shares the embedding matrix for output projection (saves memory)
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Vocabulary Size
+              </label>
+              <input
+                type="number"
+                value={node.data.vocab_size || 151936}
+                onChange={(e) => handleChange('vocab_size', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-pink-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Number of tokens in the vocabulary
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'dataset':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Dataset Name
+              </label>
+              <input
+                type="text"
+                value={node.data.name || ''}
+                onChange={(e) => handleChange('name', e.target.value)}
+                placeholder="HuggingFaceFW/fineweb-edu"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                HuggingFace dataset identifier
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Subset (optional)
+              </label>
+              <input
+                type="text"
+                value={node.data.subset || ''}
+                onChange={(e) => handleChange('subset', e.target.value)}
+                placeholder="e.g., fra_Latn"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Split
+              </label>
+              <input
+                type="text"
+                value={node.data.split || 'train'}
+                onChange={(e) => handleChange('split', e.target.value)}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Weight (optional)
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={node.data.weight || 1.0}
+                onChange={(e) => handleChange('weight', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Sampling weight for dataset mixing
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'optimizer':
+        const optimizerType = node.data.optimizer || 'muon';
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Optimizer Type
+              </label>
+              <select
+                value={optimizerType}
+                onChange={(e) => handleChange('optimizer', e.target.value)}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+              >
+                <option value="adamw">AdamW</option>
+                <option value="muon">Muon</option>
+                <option value="lion">Lion</option>
+                <option value="sophia">Sophia</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Learning Rate
+              </label>
+              <input
+                type="number"
+                step="0.001"
+                value={node.data.lr || 0.05}
+                onChange={(e) => handleChange('lr', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Weight Decay
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.weight_decay || 0.1}
+                onChange={(e) => handleChange('weight_decay', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+              />
+            </div>
+
+            {/* AdamW-specific parameters */}
+            {optimizerType === 'adamw' && (
+              <>
+                <div className="border-t border-slate-600 pt-4">
+                  <h4 className="text-sm font-semibold text-orange-400 mb-3">AdamW Parameters</h4>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 mb-2 block">
+                    Beta1
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={node.data.adamw_beta1 || 0.9}
+                    onChange={(e) => handleChange('adamw_beta1', parseFloat(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 mb-2 block">
+                    Beta2
+                  </label>
+                  <input
+                    type="number"
+                    step="0.001"
+                    value={node.data.adamw_beta2 || 0.999}
+                    onChange={(e) => handleChange('adamw_beta2', parseFloat(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 mb-2 block">
+                    Epsilon
+                  </label>
+                  <input
+                    type="number"
+                    step="0.00000001"
+                    value={node.data.adamw_eps || 1e-8}
+                    onChange={(e) => handleChange('adamw_eps', parseFloat(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+              </>
+            )}
+
+            {/* Muon-specific parameters */}
+            {optimizerType === 'muon' && (
+              <>
+                <div className="border-t border-slate-600 pt-4">
+                  <h4 className="text-sm font-semibold text-orange-400 mb-3">Muon Parameters</h4>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 mb-2 block">
+                    Momentum
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={node.data.muon_momentum || 0.95}
+                    onChange={(e) => handleChange('muon_momentum', parseFloat(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 mb-2 block">
+                    Use Nesterov
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={node.data.muon_nesterov ?? true}
+                      onChange={(e) => handleChange('muon_nesterov', e.target.checked)}
+                      className="w-4 h-4 bg-slate-700 border-slate-600 rounded text-orange-500 focus:ring-2 focus:ring-orange-500"
+                    />
+                    <span className="text-white text-sm">
+                      Enable Nesterov momentum
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Lion-specific parameters */}
+            {optimizerType === 'lion' && (
+              <>
+                <div className="border-t border-slate-600 pt-4">
+                  <h4 className="text-sm font-semibold text-orange-400 mb-3">Lion Parameters</h4>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 mb-2 block">
+                    Beta1
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={node.data.lion_beta1 || 0.9}
+                    onChange={(e) => handleChange('lion_beta1', parseFloat(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 mb-2 block">
+                    Beta2
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={node.data.lion_beta2 || 0.99}
+                    onChange={(e) => handleChange('lion_beta2', parseFloat(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+              </>
+            )}
+
+            {/* Sophia-specific parameters */}
+            {optimizerType === 'sophia' && (
+              <>
+                <div className="border-t border-slate-600 pt-4">
+                  <h4 className="text-sm font-semibold text-orange-400 mb-3">Sophia Parameters</h4>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 mb-2 block">
+                    Beta1
+                  </label>
+                  <input
+                    type="number"
+                    step="0.001"
+                    value={node.data.sophia_beta1 || 0.965}
+                    onChange={(e) => handleChange('sophia_beta1', parseFloat(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 mb-2 block">
+                    Beta2
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={node.data.sophia_beta2 || 0.99}
+                    onChange={(e) => handleChange('sophia_beta2', parseFloat(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-300 mb-2 block">
+                    Rho (Clipping)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={node.data.sophia_rho || 0.04}
+                    onChange={(e) => handleChange('sophia_rho', parseFloat(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        );
+
+      case 'scheduler':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Scheduler Type
+              </label>
+              <select
+                value={node.data.scheduler || 'cosine'}
+                onChange={(e) => handleChange('scheduler', e.target.value)}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              >
+                <option value="none">None (Constant)</option>
+                <option value="cosine">Cosine</option>
+                <option value="linear">Linear</option>
+                <option value="polynomial">Polynomial</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Warmup Steps
+              </label>
+              <input
+                type="number"
+                value={node.data.warmup_steps || 1000}
+                onChange={(e) => handleChange('warmup_steps', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
+          </div>
+        );
+
+      case 'adamw':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Learning Rate
+              </label>
+              <input
+                type="number"
+                step="0.0001"
+                value={node.data.lr || 0.0001}
+                onChange={(e) => handleChange('lr', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Weight Decay
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.weight_decay || 0.1}
+                onChange={(e) => handleChange('weight_decay', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+            </div>
+            <div className="border-t border-slate-600 pt-4">
+              <h4 className="text-sm font-semibold text-red-400 mb-3">AdamW Parameters</h4>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Beta1
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.beta1 || 0.9}
+                onChange={(e) => handleChange('beta1', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Beta2
+              </label>
+              <input
+                type="number"
+                step="0.001"
+                value={node.data.beta2 || 0.999}
+                onChange={(e) => handleChange('beta2', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Epsilon
+              </label>
+              <input
+                type="number"
+                step="0.00000001"
+                value={node.data.eps || 1e-8}
+                onChange={(e) => handleChange('eps', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+            </div>
+          </div>
+        );
+
+      case 'muon':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Learning Rate
+              </label>
+              <input
+                type="number"
+                step="0.001"
+                value={node.data.lr || 0.05}
+                onChange={(e) => handleChange('lr', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Weight Decay
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.weight_decay || 0.1}
+                onChange={(e) => handleChange('weight_decay', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+              />
+            </div>
+            <div className="border-t border-slate-600 pt-4">
+              <h4 className="text-sm font-semibold text-orange-400 mb-3">Muon Parameters</h4>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Momentum
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.momentum || 0.95}
+                onChange={(e) => handleChange('momentum', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Use Nesterov
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={node.data.nesterov ?? true}
+                  onChange={(e) => handleChange('nesterov', e.target.checked)}
+                  className="w-4 h-4 bg-slate-700 border-slate-600 rounded text-orange-500 focus:ring-2 focus:ring-orange-500"
+                />
+                <span className="text-white text-sm">
+                  Enable Nesterov momentum
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'lion':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Learning Rate
+              </label>
+              <input
+                type="number"
+                step="0.0001"
+                value={node.data.lr || 0.0003}
+                onChange={(e) => handleChange('lr', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Weight Decay
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.weight_decay || 0.1}
+                onChange={(e) => handleChange('weight_decay', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div className="border-t border-slate-600 pt-4">
+              <h4 className="text-sm font-semibold text-amber-400 mb-3">Lion Parameters</h4>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Beta1
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.beta1 || 0.9}
+                onChange={(e) => handleChange('beta1', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Beta2
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.beta2 || 0.99}
+                onChange={(e) => handleChange('beta2', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+          </div>
+        );
+
+      case 'sophia':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Learning Rate
+              </label>
+              <input
+                type="number"
+                step="0.0001"
+                value={node.data.lr || 0.0001}
+                onChange={(e) => handleChange('lr', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Weight Decay
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.weight_decay || 0.1}
+                onChange={(e) => handleChange('weight_decay', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+            </div>
+            <div className="border-t border-slate-600 pt-4">
+              <h4 className="text-sm font-semibold text-rose-400 mb-3">Sophia Parameters</h4>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Beta1
+              </label>
+              <input
+                type="number"
+                step="0.001"
+                value={node.data.beta1 || 0.965}
+                onChange={(e) => handleChange('beta1', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Beta2
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.beta2 || 0.99}
+                onChange={(e) => handleChange('beta2', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Rho (Clipping)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.rho || 0.04}
+                onChange={(e) => handleChange('rho', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+              />
+            </div>
+          </div>
+        );
+
+      case 'cosine':
+      case 'linear':
+      case 'polynomial':
+      case 'constant':
+        const schedulerColors = {
+          cosine: 'purple',
+          linear: 'violet',
+          polynomial: 'fuchsia',
+          constant: 'slate'
+        };
+        const color = schedulerColors[type as keyof typeof schedulerColors] || 'purple';
+        return (
+          <div className="space-y-4">
+            {type !== 'constant' && (
+              <div>
+                <label className="text-sm font-medium text-slate-300 mb-2 block">
+                  Warmup Steps
+                </label>
+                <input
+                  type="number"
+                  value={node.data.warmup_steps || 1000}
+                  onChange={(e) => handleChange('warmup_steps', parseInt(e.target.value))}
+                  className={`w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-${color}-500`}
+                />
+                <p className="text-xs text-slate-400 mt-1">
+                  Number of steps for learning rate warmup
+                </p>
+              </div>
+            )}
+            {type === 'polynomial' && (
+              <div>
+                <label className="text-sm font-medium text-slate-300 mb-2 block">
+                  Power
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={node.data.power || 2.0}
+                  onChange={(e) => handleChange('power', parseFloat(e.target.value))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-fuchsia-500"
+                />
+                <p className="text-xs text-slate-400 mt-1">
+                  Polynomial decay power
+                </p>
+              </div>
+            )}
+            {type === 'constant' && (
+              <div className="text-slate-400 text-sm">
+                <p>Constant learning rate - no decay applied.</p>
+                <p className="mt-2">The optimizer's base learning rate will remain unchanged throughout training.</p>
+              </div>
+            )}
+          </div>
+        );
+
+      case 'hyperparams':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Batch Size
+              </label>
+              <input
+                type="number"
+                value={node.data.batch_size || 1}
+                onChange={(e) => handleChange('batch_size', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Gradient Accumulation Steps
+              </label>
+              <input
+                type="number"
+                value={node.data.gradient_accumulation_steps || 64}
+                onChange={(e) => handleChange('gradient_accumulation_steps', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Steps
+              </label>
+              <input
+                type="number"
+                value={node.data.max_steps || 10000}
+                onChange={(e) => handleChange('max_steps', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Warmup Steps
+              </label>
+              <input
+                type="number"
+                value={node.data.warmup_steps || 100}
+                onChange={(e) => handleChange('warmup_steps', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Number of steps for learning rate warmup
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Gradient Clipping
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={node.data.grad_clip || 1.0}
+                onChange={(e) => handleChange('grad_clip', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Eval Every (steps)
+              </label>
+              <input
+                type="number"
+                value={node.data.eval_every || 500}
+                onChange={(e) => handleChange('eval_every', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Eval Steps
+              </label>
+              <input
+                type="number"
+                value={node.data.eval_steps || 100}
+                onChange={(e) => handleChange('eval_steps', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Number of batches to use for each evaluation
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'model':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Model Configuration Source
+              </label>
+              <select
+                value={node.data.config_source || 'current'}
+                onChange={(e) => handleChange('config_source', e.target.value)}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="current">Use Current Model Design</option>
+                <option value="file">Load from JSON File</option>
+              </select>
+              <p className="text-xs text-slate-400 mt-1">
+                {node.data.config_source === 'current'
+                  ? 'Use the model designed in Model Architecture tab'
+                  : 'Load model config from a JSON file'}
+              </p>
+            </div>
+
+            {node.data.config_source === 'file' && (
+              <div>
+                <label className="text-sm font-medium text-slate-300 mb-2 block">
+                  Model Config Path
+                </label>
+                <input
+                  type="text"
+                  value={node.data.config_path || ''}
+                  onChange={(e) => handleChange('config_path', e.target.value)}
+                  placeholder="model_config.json"
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            )}
+
+            <div className="border-t border-slate-600 pt-4">
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Training Mode
+              </label>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="training_mode"
+                    checked={!node.data.resume_training}
+                    onChange={() => handleChange('resume_training', false)}
+                    className="text-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span className="text-white text-sm">Fresh Training (from scratch)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="training_mode"
+                    checked={node.data.resume_training || false}
+                    onChange={() => handleChange('resume_training', true)}
+                    className="text-indigo-500 focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span className="text-white text-sm">Resume from Checkpoint</span>
+                </label>
+              </div>
+            </div>
+
+            {node.data.resume_training && (
+              <div>
+                <label className="text-sm font-medium text-slate-300 mb-2 block">
+                  Checkpoint Path
+                </label>
+                <input
+                  type="text"
+                  value={node.data.checkpoint_path || ''}
+                  onChange={(e) => handleChange('checkpoint_path', e.target.value)}
+                  placeholder="checkpoints/best_model.pt"
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <p className="text-xs text-slate-400 mt-1">
+                  Path to the checkpoint file to resume training from
+                </p>
+              </div>
+            )}
+          </div>
+        );
+
+      default:
+        return (
+          <div className="text-slate-400 text-sm">
+            No configuration available for this block type.
+          </div>
+        );
+    }
+  };
+
+  return (
+    <AnimatePresence>
+      {node && (
+        <motion.div
+          initial={{ x: 400, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={{ x: 400, opacity: 0 }}
+          transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+          className="absolute top-0 right-0 w-96 h-full bg-slate-800 border-l border-slate-700 shadow-2xl overflow-y-auto z-10"
+        >
+          {/* Header */}
+          <div className="sticky top-0 bg-slate-800 border-b border-slate-700 p-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-white font-bold text-lg">Configure Block</h2>
+              <p className="text-slate-400 text-sm">{node.data.label || node.type}</p>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5 text-slate-400" />
+            </button>
+          </div>
+
+          {/* Configuration Fields */}
+          <div className="p-4">
+            {renderConfigFields()}
+          </div>
+
+          {/* Footer Info */}
+          <div className="sticky bottom-0 bg-slate-800 border-t border-slate-700 p-4">
+            <div className="text-xs text-slate-400">
+              💡 Changes are applied in real-time
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+};
+
+export default ConfigPanel;

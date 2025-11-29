@@ -1,0 +1,46 @@
+# Git
+.git
+.gitignore
+.github
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.venv
+venv
+env
+
+# Node
+node_modules
+npm-debug.log
+yarn-error.log
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+
+# Cache
+cache
+checkpoints
+gui/backend/cache
+gui/backend/checkpoints
+
+# Docs
+docs
+*.md
+LICENSE
+
+# Test files
+test_*
+todos

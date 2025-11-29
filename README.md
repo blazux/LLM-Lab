@@ -13,7 +13,32 @@ A flexible framework for training and fine-tuning Large Language Models from scr
 
 ## Quick Start
 
-### Installation
+### Option 1: Docker (Recommended)
+
+You'll need an NVIDIA GPU and nvidia-docker installed:
+
+```bash
+docker run -d -p 8000:8000 \
+  --gpus all \
+  -v $(pwd)/checkpoints:/app/checkpoints \
+  -v $(pwd)/cache:/app/cache \
+  --name llm-lab \
+  blazux/llm-lab
+```
+
+Access the web interface at http://localhost:8000
+
+or
+
+Launch the CLI : 
+```bash
+docker exec -it llm-lab ../../llm-lab.sh
+```
+
+**The web interface is a work in progress and is far from offering all the features of the CLI version.**
+
+
+### Option 2: Local Installation
 
 ```bash
 pip install -r requirements.txt

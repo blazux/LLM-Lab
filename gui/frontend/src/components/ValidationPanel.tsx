@@ -1,0 +1,180 @@
+import { Node, Edge } from 'reactflow';
+import { CheckCircle2, AlertCircle, XCircle } from 'lucide-react';
+
+interface ValidationPanelProps {
+  nodes: Node[];
+  edges: Edge[];
+  mode: 'model' | 'training';
+}
+
+interface ValidationItem {
+  label: string;
+  status: 'complete' | 'warning' | 'missing';
+  message?: string;
+}
+
+const ValidationPanel = ({ nodes, edges, mode }: ValidationPanelProps) => {
+  const validateModel = (): ValidationItem[] => {
+    const validations: ValidationItem[] = [];
+
+    // Check for tokenizer
+    const hasTokenizer = nodes.some(n => n.type === 'tokenizer');
+    validations.push({
+      label: 'Tokenizer',
+      status: hasTokenizer ? 'complete' : 'missing',
+      message: hasTokenizer ? undefined : 'Add a Tokenizer node'
+    });
+
+    // Check for embedding
+    const hasEmbedding = nodes.some(n => n.type === 'embedding');
+    validations.push({
+      label: 'Embedding',
+      status: hasEmbedding ? 'complete' : 'missing',
+      message: hasEmbedding ? undefined : 'Add an Embedding node'
+    });
+
+    // Check for positional encoding
+    const hasPosEncoding = nodes.some(n => ['rope', 'alibi', 'yarn', 'sinusoidal'].includes(n.type || ''));
+    validations.push({
+      label: 'Positional Encoding',
+      status: hasPosEncoding ? 'complete' : 'warning',
+      message: hasPosEncoding ? undefined : 'Add RoPE, ALiBi, YARN, or Sinusoidal'
+    });
+
+    // Check for attention
+    const hasAttention = nodes.some(n => ['mha', 'gqa', 'mqa', 'mla'].includes(n.type || ''));
+    validations.push({
+      label: 'Attention',
+      status: hasAttention ? 'complete' : 'missing',
+      message: hasAttention ? undefined : 'Add MHA, GQA, MQA, or MLA'
+    });
+
+    // Check for normalization
+    const hasNorm = nodes.some(n => ['rmsnorm', 'layernorm'].includes(n.type || ''));
+    validations.push({
+      label: 'Normalization',
+      status: hasNorm ? 'complete' : 'missing',
+      message: hasNorm ? undefined : 'Add RMSNorm or LayerNorm'
+    });
+
+    // Check for FFN
+    const hasFFN = nodes.some(n => ['swiglu', 'gelu', 'relu'].includes(n.type || ''));
+    validations.push({
+      label: 'Feed-Forward',
+      status: hasFFN ? 'complete' : 'missing',
+      message: hasFFN ? undefined : 'Add SwiGLU, GELU, or ReLU'
+    });
+
+    // Check for loop edge
+    const hasLoop = edges.some(e => e.data?.isLoop);
+    validations.push({
+      label: 'Layer Loop',
+      status: hasLoop ? 'complete' : 'warning',
+      message: hasLoop ? `${edges.find(e => e.data?.isLoop)?.data?.repeatCount || 0} layers` : 'Connect second Norm back to Attention for n_layers'
+    });
+
+    // Check for LM Head
+    const hasLMHead = nodes.some(n => n.type === 'lmhead');
+    validations.push({
+      label: 'LM Head',
+      status: hasLMHead ? 'complete' : 'missing',
+      message: hasLMHead ? undefined : 'Add an LM Head node'
+    });
+
+    return validations;
+  };
+
+  const validateTraining = (): ValidationItem[] => {
+    const validations: ValidationItem[] = [];
+
+    // Check for model
+    const hasModel = nodes.some(n => n.type === 'model');
+    validations.push({
+      label: 'Model',
+      status: hasModel ? 'complete' : 'missing',
+      message: hasModel ? undefined : 'Add a Model node'
+    });
+
+    // Check for dataset
+    const hasDataset = nodes.some(n => n.type === 'dataset');
+    validations.push({
+      label: 'Dataset',
+      status: hasDataset ? 'complete' : 'missing',
+      message: hasDataset ? undefined : 'Add a Dataset node'
+    });
+
+    // Check for optimizer
+    const hasOptimizer = nodes.some(n => ['adamw', 'muon', 'lion', 'sophia'].includes(n.type || ''));
+    validations.push({
+      label: 'Optimizer',
+      status: hasOptimizer ? 'complete' : 'missing',
+      message: hasOptimizer ? undefined : 'Add AdamW, Muon, Lion, or Sophia'
+    });
+
+    // Check for scheduler
+    const hasScheduler = nodes.some(n => ['cosine', 'linear', 'polynomial', 'constant'].includes(n.type || ''));
+    validations.push({
+      label: 'LR Scheduler',
+      status: hasScheduler ? 'complete' : 'warning',
+      message: hasScheduler ? undefined : 'Add Cosine, Linear, Polynomial, or Constant scheduler'
+    });
+
+    // Check for hyperparameters
+    const hasHyperparams = nodes.some(n => n.type === 'hyperparams');
+    validations.push({
+      label: 'Hyperparameters',
+      status: hasHyperparams ? 'complete' : 'warning',
+      message: hasHyperparams ? undefined : 'Add a Hyperparameters node (defaults will be used)'
+    });
+
+    return validations;
+  };
+
+  const validations = mode === 'model' ? validateModel() : validateTraining();
+  const completeCount = validations.filter(v => v.status === 'complete').length;
+  const totalCount = validations.length;
+  const percentage = Math.round((completeCount / totalCount) * 100);
+
+  return (
+    <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 shadow-xl">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-white font-semibold text-sm">Configuration Status</h3>
+        <div className="text-xs font-mono text-slate-400">
+          {completeCount}/{totalCount} ({percentage}%)
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {validations.map((validation, index) => (
+          <div key={index} className="flex items-start gap-2">
+            {validation.status === 'complete' && (
+              <CheckCircle2 className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+            )}
+            {validation.status === 'warning' && (
+              <AlertCircle className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+            )}
+            {validation.status === 'missing' && (
+              <XCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+            )}
+            <div className="flex-1 min-w-0">
+              <div className={`text-xs font-medium ${
+                validation.status === 'complete' ? 'text-green-400' :
+                validation.status === 'warning' ? 'text-yellow-400' :
+                'text-red-400'
+              }`}>
+                {validation.label}
+              </div>
+              {validation.message && (
+                <div className="text-xs text-slate-400 mt-0.5">
+                  {validation.message}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default ValidationPanel;
