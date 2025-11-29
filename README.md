@@ -37,6 +37,18 @@ docker exec -it llm-lab ../../llm-lab.sh
 
 **The web interface is a work in progress and is far from offering all the features of the CLI version.**
 
+#### Web Interface
+
+The web interface provides a visual workflow for configuring and training your models:
+
+**Model Configuration**
+![Model Configuration](model_config.png)
+
+**Training Configuration**
+![Training Configuration](training_config.png)
+
+**Training Monitor**
+![Training Monitor](training_monitor.png)
 
 ### Option 2: Local Installation
 
