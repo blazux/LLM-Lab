@@ -157,7 +157,7 @@ def train_model(
     model_config: ModelConfig,
     train_config: TrainingConfig,
     checkpoint_path: str = None,
-    output_dir: str = "checkpoints",
+    output_dir: str = "outputs/pretraining",
     additional_steps: int = 0,
     load_optimizer_state: bool = True,
     callback: callable = None
@@ -175,6 +175,10 @@ def train_model(
     """
 
     os.makedirs(output_dir, exist_ok=True)
+
+    # Save configuration files for reproducibility
+    model_config.save(f"{output_dir}/model_config.json")
+    train_config.save(f"{output_dir}/training_config.json")
 
     # Load tokenizer and create data streams
     print("\n📚 Loading tokenizer and datasets...")

@@ -16,7 +16,11 @@ sys.path.insert(0, project_root)
 sys.path.insert(0, str(Path(project_root) / 'src'))
 
 from config.config import ModelConfig, TrainingConfig
+from config.sft_config import SFTConfig
+from config.rlhf_config import RLHFConfig
 from training.train import train_model, request_stop
+from training.sft_train import train_sft
+from training.rlhf_train import train_rlhf
 
 router = APIRouter()
 
@@ -43,7 +47,95 @@ class TrainingRequest(BaseModel):
     model_cfg: Dict[str, Any]
     training_cfg: Dict[str, Any]
     checkpoint_path: Optional[str] = None
-    output_dir: str = "checkpoints"
+    output_dir: str = "outputs/pretraining"
+
+
+class RLHFRequest(BaseModel):
+    algorithm: str  # "ppo", "dpo", "grpo"
+    policy_checkpoint: str
+    datasets: List[Dict[str, Any]]
+    optimizer: str
+    learning_rate: float
+    weight_decay: float
+    batch_size: int
+    mini_batch_size: int
+    gradient_accumulation_steps: int
+    max_steps: int
+    max_grad_norm: float
+    log_every: int
+    save_every: int
+    eval_every: int
+    output_dir: str
+    # Generation parameters
+    max_new_tokens: int
+    temperature: float
+    top_k: int
+    top_p: float
+    # LoRA configuration
+    use_lora: bool
+    lora_preset: Optional[str] = "minimal"
+    lora_target_modules: Optional[List[str]] = None
+    lora_r: Optional[int] = 8
+    lora_alpha: Optional[int] = 16
+    lora_dropout: Optional[float] = 0.05
+    # Optimizer-specific params
+    adamw_beta1: Optional[float] = 0.9
+    adamw_beta2: Optional[float] = 0.999
+    adamw_eps: Optional[float] = 1e-8
+    muon_momentum: Optional[float] = 0.95
+    muon_nesterov: Optional[bool] = True
+    lion_beta1: Optional[float] = 0.9
+    lion_beta2: Optional[float] = 0.99
+    sophia_beta1: Optional[float] = 0.965
+    sophia_beta2: Optional[float] = 0.99
+    sophia_rho: Optional[float] = 0.04
+    # Algorithm-specific params
+    reward_model_name: Optional[str] = None
+    reference_checkpoint: Optional[str] = None
+    ppo_epochs: Optional[int] = 4
+    clip_range: Optional[float] = 0.2
+    gamma: Optional[float] = 1.0
+    gae_lambda: Optional[float] = 0.95
+    vf_coef: Optional[float] = 0.1
+    group_size: Optional[int] = 4
+    grpo_temperature: Optional[float] = 1.0
+
+
+class SFTRequest(BaseModel):
+    policy_checkpoint: str
+    datasets: List[Dict[str, Any]]
+    optimizer: str
+    lr: float
+    weight_decay: float
+    batch_size: int
+    gradient_accumulation_steps: int
+    max_steps: int
+    warmup_steps: int
+    scheduler: str
+    max_grad_norm: float
+    log_every: int
+    save_every: int
+    eval_every: int
+    eval_steps: int
+    save_best_only: bool
+    output_dir: str
+    use_lora: bool
+    lora_preset: Optional[str] = "minimal"
+    lora_target_modules: Optional[List[str]] = None
+    lora_r: Optional[int] = 8
+    lora_alpha: Optional[int] = 16
+    lora_dropout: Optional[float] = 0.05
+    # Optimizer-specific params
+    adamw_beta1: Optional[float] = 0.9
+    adamw_beta2: Optional[float] = 0.999
+    adamw_eps: Optional[float] = 1e-8
+    muon_momentum: Optional[float] = 0.95
+    muon_nesterov: Optional[bool] = True
+    lion_beta1: Optional[float] = 0.9
+    lion_beta2: Optional[float] = 0.99
+    sophia_beta1: Optional[float] = 0.965
+    sophia_beta2: Optional[float] = 0.99
+    sophia_rho: Optional[float] = 0.04
 
 
 class MetricsCallback:
@@ -99,7 +191,7 @@ class MetricsCallback:
 
 
 def run_training(model_config_dict: Dict, train_config_dict: Dict,
-                 checkpoint_path: Optional[str] = None, output_dir: str = "checkpoints"):
+                 checkpoint_path: Optional[str] = None, output_dir: str = "outputs/pretraining"):
     """Run training in a separate thread"""
     try:
         # Update training state
@@ -176,6 +268,79 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
         })
 
 
+def run_sft(sft_config_dict: Dict):
+    """Run SFT training in a separate thread"""
+    try:
+        # Update training state
+        training_state["is_training"] = True
+        training_state["status"] = "starting"
+        training_state["error"] = None
+
+        # Log received config
+        metrics_queue.put({
+            "type": "log",
+            "level": "info",
+            "message": f"SFT Config - Base model: {sft_config_dict.get('policy_checkpoint')}",
+            "timestamp": time.time()
+        })
+        metrics_queue.put({
+            "type": "log",
+            "level": "info",
+            "message": f"SFT Config - Datasets: {len(sft_config_dict.get('datasets', []))} dataset(s), LoRA: {sft_config_dict.get('use_lora', False)}",
+            "timestamp": time.time()
+        })
+
+        # Create config object
+        sft_config = SFTConfig(**sft_config_dict)
+
+        # Update max_steps in state
+        training_state["max_steps"] = sft_config.max_steps
+
+        # Log start
+        metrics_queue.put({
+            "type": "log",
+            "level": "success",
+            "message": f"Starting SFT training from {sft_config.policy_checkpoint}" + (" with LoRA" if sft_config.use_lora else ""),
+            "timestamp": time.time()
+        })
+
+        training_state["status"] = "training"
+
+        # Create callback for metrics
+        callback = MetricsCallback(metrics_queue)
+
+        # Run actual SFT training with callback
+        train_sft(
+            sft_config=sft_config,
+            callback=callback
+        )
+
+        # Training completed
+        metrics_queue.put({
+            "type": "log",
+            "level": "success",
+            "message": "SFT training completed successfully!",
+            "timestamp": time.time()
+        })
+
+        training_state["status"] = "completed"
+        training_state["is_training"] = False
+
+    except Exception as e:
+        # Training failed
+        error_msg = str(e)
+        training_state["error"] = error_msg
+        training_state["status"] = "error"
+        training_state["is_training"] = False
+
+        metrics_queue.put({
+            "type": "log",
+            "level": "error",
+            "message": f"SFT training failed: {error_msg}",
+            "timestamp": time.time()
+        })
+
+
 @router.post("/start")
 async def start_training(request: TrainingRequest):
     """Start training in the background"""
@@ -214,6 +379,173 @@ async def start_training(request: TrainingRequest):
     training_thread.start()
 
     return {"success": True, "message": "Training started"}
+
+
+@router.post("/sft/start")
+async def start_sft_training(request: SFTRequest):
+    """Start SFT training in the background"""
+    global training_thread
+
+    if training_state["is_training"]:
+        raise HTTPException(status_code=400, detail="Training is already in progress")
+
+    # Reset state
+    training_state.update({
+        "is_training": True,
+        "current_step": 0,
+        "max_steps": request.max_steps,
+        "current_loss": None,
+        "current_ppl": None,
+        "current_lr": None,
+        "status": "starting",
+        "error": None
+    })
+
+    # Clear old metrics
+    while not metrics_queue.empty():
+        metrics_queue.get()
+
+    # Convert request to dict for config
+    sft_config_dict = request.dict()
+
+    # Start SFT training in background thread
+    training_thread = threading.Thread(
+        target=run_sft,
+        args=(sft_config_dict,),
+        daemon=True
+    )
+    training_thread.start()
+
+    return {"success": True, "message": "SFT training started"}
+
+
+def run_rlhf(rlhf_config_dict: Dict):
+    """Run RLHF training in a separate thread"""
+    try:
+        # Update training state
+        training_state["is_training"] = True
+        training_state["status"] = "starting"
+        training_state["error"] = None
+
+        # Log received config
+        metrics_queue.put({
+            "type": "log",
+            "level": "info",
+            "message": f"RLHF Config - Algorithm: {rlhf_config_dict.get('algorithm').upper()}, Policy: {rlhf_config_dict.get('policy_checkpoint')}",
+            "timestamp": time.time()
+        })
+
+        if rlhf_config_dict.get('algorithm') == 'ppo':
+            metrics_queue.put({
+                "type": "log",
+                "level": "info",
+                "message": f"PPO - Reward Model: {rlhf_config_dict.get('reward_model_name')}, Epochs: {rlhf_config_dict.get('ppo_epochs')}",
+                "timestamp": time.time()
+            })
+        elif rlhf_config_dict.get('algorithm') == 'dpo':
+            ref_model = rlhf_config_dict.get('reference_checkpoint') or rlhf_config_dict.get('policy_checkpoint')
+            metrics_queue.put({
+                "type": "log",
+                "level": "info",
+                "message": f"DPO - Reference Model: {ref_model}, Beta: {rlhf_config_dict.get('clip_range')}",
+                "timestamp": time.time()
+            })
+        elif rlhf_config_dict.get('algorithm') == 'grpo':
+            metrics_queue.put({
+                "type": "log",
+                "level": "info",
+                "message": f"GRPO - Reward Model: {rlhf_config_dict.get('reward_model_name')}, Group Size: {rlhf_config_dict.get('group_size')}",
+                "timestamp": time.time()
+            })
+
+        # Create config object
+        rlhf_config = RLHFConfig(**rlhf_config_dict)
+
+        # Update max_steps in state
+        training_state["max_steps"] = rlhf_config.max_steps
+
+        # Log start
+        lora_status = " with LoRA" if rlhf_config.use_lora else ""
+        metrics_queue.put({
+            "type": "log",
+            "level": "success",
+            "message": f"Starting {rlhf_config.algorithm.upper()} training from {rlhf_config.policy_checkpoint}{lora_status}",
+            "timestamp": time.time()
+        })
+
+        training_state["status"] = "training"
+
+        # Create callback for metrics
+        callback = MetricsCallback(metrics_queue)
+
+        # Run actual RLHF training with callback
+        train_rlhf(
+            rlhf_config=rlhf_config,
+            callback=callback
+        )
+
+        # Training completed
+        metrics_queue.put({
+            "type": "log",
+            "level": "success",
+            "message": f"{rlhf_config.algorithm.upper()} training completed successfully!",
+            "timestamp": time.time()
+        })
+
+        training_state["status"] = "completed"
+        training_state["is_training"] = False
+
+    except Exception as e:
+        # Training failed
+        error_msg = str(e)
+        training_state["error"] = error_msg
+        training_state["status"] = "error"
+        training_state["is_training"] = False
+
+        metrics_queue.put({
+            "type": "log",
+            "level": "error",
+            "message": f"RLHF training failed: {error_msg}",
+            "timestamp": time.time()
+        })
+
+
+@router.post("/rlhf/start")
+async def start_rlhf_training(request: RLHFRequest):
+    """Start RLHF training in the background"""
+    global training_thread
+
+    if training_state["is_training"]:
+        raise HTTPException(status_code=400, detail="Training is already in progress")
+
+    # Reset state
+    training_state.update({
+        "is_training": True,
+        "current_step": 0,
+        "max_steps": request.max_steps,
+        "current_loss": None,
+        "current_ppl": None,
+        "current_lr": None,
+        "status": "starting",
+        "error": None
+    })
+
+    # Clear old metrics
+    while not metrics_queue.empty():
+        metrics_queue.get()
+
+    # Convert request to dict for config
+    rlhf_config_dict = request.dict()
+
+    # Start RLHF training in background thread
+    training_thread = threading.Thread(
+        target=run_rlhf,
+        args=(rlhf_config_dict,),
+        daemon=True
+    )
+    training_thread.start()
+
+    return {"success": True, "message": f"{request.algorithm.upper()} training started"}
 
 
 @router.post("/stop")

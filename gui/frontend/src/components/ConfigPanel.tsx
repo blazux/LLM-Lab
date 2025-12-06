@@ -1060,20 +1060,6 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
             </div>
             <div>
               <label className="text-sm font-medium text-slate-300 mb-2 block">
-                Warmup Steps
-              </label>
-              <input
-                type="number"
-                value={node.data.warmup_steps || 100}
-                onChange={(e) => handleChange('warmup_steps', parseInt(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
-              <p className="text-xs text-slate-400 mt-1">
-                Number of steps for learning rate warmup
-              </p>
-            </div>
-            <div>
-              <label className="text-sm font-medium text-slate-300 mb-2 block">
                 Gradient Clipping
               </label>
               <input
@@ -1194,6 +1180,327 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 </p>
               </div>
             )}
+          </div>
+        );
+
+      case 'basemodel':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Checkpoint Path
+              </label>
+              <input
+                type="text"
+                value={node.data.checkpoint_path || 'checkpoints/best_model.pt'}
+                onChange={(e) => handleChange('checkpoint_path', e.target.value)}
+                placeholder="checkpoints/best_model.pt"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Path to the pretrained model checkpoint
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'lora':
+        return (
+          <div className="space-y-4">
+            <p className="text-xs text-slate-400">
+              Parameter-efficient fine-tuning with LoRA. Remove this node to disable LoRA.
+            </p>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                LoRA Preset
+              </label>
+              <select
+                value={node.data.preset || 'minimal'}
+                onChange={(e) => handleChange('preset', e.target.value)}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              >
+                <option value="minimal">Minimal (Q, V)</option>
+                <option value="attention_only">Attention Only</option>
+                <option value="ffn_only">FFN Only</option>
+                <option value="all">All Layers</option>
+                <option value="custom">Custom</option>
+              </select>
+              <p className="text-xs text-slate-400 mt-1">
+                Selects which layers to apply LoRA to
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                LoRA Rank (r)
+              </label>
+              <input
+                type="number"
+                value={node.data.lora_r || 8}
+                onChange={(e) => handleChange('lora_r', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Lower rank = fewer parameters (default: 8)
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                LoRA Alpha
+              </label>
+              <input
+                type="number"
+                value={node.data.lora_alpha || 16}
+                onChange={(e) => handleChange('lora_alpha', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Scaling factor (default: 16)
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                LoRA Dropout
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.lora_dropout || 0.05}
+                onChange={(e) => handleChange('lora_dropout', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Dropout probability (default: 0.05)
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'ppo_reward':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Reward Model Name
+              </label>
+              <input
+                type="text"
+                value={node.data.model_name || 'OpenAssistant/reward-model-deberta-v3-large-v2'}
+                onChange={(e) => handleChange('model_name', e.target.value)}
+                placeholder="OpenAssistant/reward-model-deberta-v3-large-v2"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                HuggingFace reward model identifier for PPO
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'dpo_reference':
+        return (
+          <div className="space-y-4">
+            <p className="text-xs text-slate-400 mb-2">
+              Reference model for DPO. Leave checkpoint empty to use the policy checkpoint.
+            </p>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Reference Checkpoint (Optional)
+              </label>
+              <input
+                type="text"
+                value={node.data.checkpoint_path || ''}
+                onChange={(e) => handleChange('checkpoint_path', e.target.value)}
+                placeholder="(use policy checkpoint)"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Path to reference model checkpoint (optional)
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'grpo_reward':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Reward Model Name
+              </label>
+              <input
+                type="text"
+                value={node.data.model_name || 'OpenAssistant/reward-model-deberta-v3-large-v2'}
+                onChange={(e) => handleChange('model_name', e.target.value)}
+                placeholder="OpenAssistant/reward-model-deberta-v3-large-v2"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                HuggingFace reward model identifier for GRPO
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'rlhf_hyperparams':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Batch Size
+              </label>
+              <input
+                type="number"
+                value={node.data.batch_size || 4}
+                onChange={(e) => handleChange('batch_size', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Mini Batch Size
+              </label>
+              <input
+                type="number"
+                value={node.data.mini_batch_size || 1}
+                onChange={(e) => handleChange('mini_batch_size', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Batch size for each optimization step
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Learning Rate
+              </label>
+              <input
+                type="number"
+                step="0.00001"
+                value={node.data.learning_rate || 0.00001}
+                onChange={(e) => handleChange('learning_rate', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Steps
+              </label>
+              <input
+                type="number"
+                value={node.data.max_steps || 1000}
+                onChange={(e) => handleChange('max_steps', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max New Tokens
+              </label>
+              <input
+                type="number"
+                value={node.data.max_new_tokens || 128}
+                onChange={(e) => handleChange('max_new_tokens', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum tokens to generate per response
+              </p>
+            </div>
+
+            {/* PPO-specific parameters */}
+            <div className="border-t border-slate-600 pt-4">
+              <h4 className="text-sm font-semibold text-amber-400 mb-3">PPO Parameters</h4>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                PPO Epochs
+              </label>
+              <input
+                type="number"
+                value={node.data.ppo_epochs || 4}
+                onChange={(e) => handleChange('ppo_epochs', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Clip Range
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.clip_range || 0.2}
+                onChange={(e) => handleChange('clip_range', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Gamma (Discount Factor)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.gamma || 0.99}
+                onChange={(e) => handleChange('gamma', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                GAE Lambda
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.gae_lambda || 0.95}
+                onChange={(e) => handleChange('gae_lambda', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Value Function Coefficient
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={node.data.vf_coef || 0.5}
+                onChange={(e) => handleChange('vf_coef', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+
+            {/* GRPO-specific parameters */}
+            <div className="border-t border-slate-600 pt-4">
+              <h4 className="text-sm font-semibold text-amber-400 mb-3">GRPO Parameters</h4>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Group Size
+              </label>
+              <input
+                type="number"
+                value={node.data.group_size || 4}
+                onChange={(e) => handleChange('group_size', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Number of responses to generate per prompt
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                GRPO Temperature
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={node.data.grpo_temperature || 0.01}
+                onChange={(e) => handleChange('grpo_temperature', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
           </div>
         );
 

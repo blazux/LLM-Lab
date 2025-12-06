@@ -20,7 +20,7 @@ You'll need an NVIDIA GPU and nvidia-docker installed:
 ```bash
 docker run -d -p 8000:8000 \
   --gpus all \
-  -v $(pwd)/checkpoints:/app/checkpoints \
+  -v $(pwd)/outputs:/app/outputs \
   -v $(pwd)/cache:/app/cache \
   --name llm-lab \
   blazux/llm-lab

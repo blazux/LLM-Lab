@@ -8,7 +8,7 @@ class SFTConfig:
     """Supervised Fine-Tuning configuration"""
 
     # Policy Model
-    policy_checkpoint: str = "checkpoints/best_model.pt"
+    policy_checkpoint: str = "outputs/pretraining/best_model.pt"
 
     # Dataset Configuration
     datasets: List[dict] = None
@@ -53,7 +53,7 @@ class SFTConfig:
     save_best_only: bool = True
 
     # Output
-    output_dir: str = "sft_checkpoints"
+    output_dir: str = "outputs/sft"
 
     # LoRA Configuration (Parameter-Efficient Fine-Tuning)
     use_lora: bool = False

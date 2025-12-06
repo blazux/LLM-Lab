@@ -30,11 +30,10 @@ yarn-error.log
 *.swo
 .DS_Store
 
-# Cache
+# Cache and outputs
 cache
-checkpoints
+outputs
 gui/backend/cache
-gui/backend/checkpoints
 
 # Docs
 docs

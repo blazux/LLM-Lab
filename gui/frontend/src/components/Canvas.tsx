@@ -16,6 +16,8 @@ import 'reactflow/dist/style.css';
 
 import Sidebar from './Sidebar';
 import TrainingCanvas from './TrainingCanvas';
+import SFTCanvas from './SFTCanvas';
+import RLHFCanvas from './RLHFCanvas';
 import TrainingMonitor from './TrainingMonitor';
 import TrainingStatusWidget from './TrainingStatusWidget';
 import Inference from './Inference';
@@ -88,7 +90,7 @@ const initialNodes: Node[] = [
 
 const Canvas = () => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const [activeTab, setActiveTab] = useState<'model' | 'training' | 'monitor' | 'inference'>('model');
+  const [activeTab, setActiveTab] = useState<'model' | 'training' | 'sft' | 'rlhf' | 'monitor' | 'inference'>('model');
 
   // Model Architecture state
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
@@ -97,6 +99,17 @@ const Canvas = () => {
   // Training Canvas state (separate from model architecture)
   const [trainingNodes, setTrainingNodes] = useState<Node[]>([]);
   const [trainingEdges, setTrainingEdges] = useState<Edge[]>([]);
+  const [trainingKey, setTrainingKey] = useState(0);
+
+  // SFT Canvas state (separate from training and model)
+  const [sftNodes, setSftNodes] = useState<Node[]>([]);
+  const [sftEdges, setSftEdges] = useState<Edge[]>([]);
+  const [sftKey, setSftKey] = useState(0);
+
+  // RLHF Canvas state (separate from all others)
+  const [rlhfNodes, setRlhfNodes] = useState<Node[]>([]);
+  const [rlhfEdges, setRlhfEdges] = useState<Edge[]>([]);
+  const [rlhfKey, setRlhfKey] = useState(0);
 
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
@@ -118,7 +131,20 @@ const Canvas = () => {
   const handleLoadTrainingPreset = useCallback((presetNodes: Node[], presetEdges: Edge[]) => {
     setTrainingNodes(presetNodes);
     setTrainingEdges(presetEdges);
-  }, [setTrainingNodes, setTrainingEdges]);
+    setTrainingKey(prev => prev + 1);
+  }, []);
+
+  const handleLoadSFTPreset = useCallback((presetNodes: Node[], presetEdges: Edge[]) => {
+    setSftNodes(presetNodes);
+    setSftEdges(presetEdges);
+    setSftKey(prev => prev + 1);
+  }, []);
+
+  const handleLoadRLHFPreset = useCallback((presetNodes: Node[], presetEdges: Edge[]) => {
+    setRlhfNodes(presetNodes);
+    setRlhfEdges(presetEdges);
+    setRlhfKey(prev => prev + 1);
+  }, []);
 
   const handleClearModelCanvas = useCallback(() => {
     if (confirm('Are you sure you want to clear the model canvas?')) {
@@ -133,6 +159,23 @@ const Canvas = () => {
     if (confirm('Are you sure you want to clear the training canvas?')) {
       setTrainingNodes([]);
       setTrainingEdges([]);
+      setTrainingKey(prev => prev + 1);
+    }
+  }, []);
+
+  const handleClearSFTCanvas = useCallback(() => {
+    if (confirm('Are you sure you want to clear the SFT canvas?')) {
+      setSftNodes([]);
+      setSftEdges([]);
+      setSftKey(prev => prev + 1);
+    }
+  }, []);
+
+  const handleClearRLHFCanvas = useCallback(() => {
+    if (confirm('Are you sure you want to clear the RLHF canvas?')) {
+      setRlhfNodes([]);
+      setRlhfEdges([]);
+      setRlhfKey(prev => prev + 1);
     }
   }, []);
 
@@ -357,14 +400,34 @@ const Canvas = () => {
     [reactFlowInstance, setNodes]
   );
 
+  const getPresetHandler = () => {
+    switch (activeTab) {
+      case 'model': return handleLoadModelPreset;
+      case 'training': return handleLoadTrainingPreset;
+      case 'sft': return handleLoadSFTPreset;
+      case 'rlhf': return handleLoadRLHFPreset;
+      default: return handleLoadTrainingPreset;
+    }
+  };
+
+  const getClearCanvasHandler = () => {
+    switch (activeTab) {
+      case 'model': return handleClearModelCanvas;
+      case 'training': return handleClearTrainingCanvas;
+      case 'sft': return handleClearSFTCanvas;
+      case 'rlhf': return handleClearRLHFCanvas;
+      default: return handleClearTrainingCanvas;
+    }
+  };
+
   return (
     <>
       <Sidebar
-        nodes={activeTab === 'model' ? nodes : trainingNodes}
+        nodes={activeTab === 'model' ? nodes : activeTab === 'sft' ? sftNodes : activeTab === 'rlhf' ? rlhfNodes : trainingNodes}
         onGenerateConfig={handleGenerateConfig}
         activeTab={activeTab}
-        onLoadPreset={activeTab === 'model' ? handleLoadModelPreset : handleLoadTrainingPreset}
-        onClearCanvas={activeTab === 'model' ? handleClearModelCanvas : handleClearTrainingCanvas}
+        onLoadPreset={getPresetHandler()}
+        onClearCanvas={getClearCanvasHandler()}
       />
       <div className="flex-1 relative flex flex-col" ref={reactFlowWrapper}>
         {/* Tab Switcher */}
@@ -388,6 +451,26 @@ const Canvas = () => {
             }`}
           >
             ⚙️ Training Config
+          </button>
+          <button
+            onClick={() => setActiveTab('sft')}
+            className={`px-4 py-2 rounded-lg font-semibold text-sm transition-all ${
+              activeTab === 'sft'
+                ? 'bg-purple-600 text-white shadow-lg'
+                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+            }`}
+          >
+            🎯 SFT Config
+          </button>
+          <button
+            onClick={() => setActiveTab('rlhf')}
+            className={`px-4 py-2 rounded-lg font-semibold text-sm transition-all ${
+              activeTab === 'rlhf'
+                ? 'bg-amber-600 text-white shadow-lg'
+                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+            }`}
+          >
+            🎖️ RLHF Config
           </button>
           <button
             onClick={() => setActiveTab('monitor')}
@@ -493,14 +576,6 @@ const Canvas = () => {
                   <h3 className="text-white font-semibold text-sm mb-3">Model Stats</h3>
                   <div className="space-y-2 text-xs">
                     <div className="flex justify-between gap-4">
-                      <span className="text-slate-400">Blocks:</span>
-                      <span className="text-white font-mono">{nodes.length}</span>
-                    </div>
-                    <div className="flex justify-between gap-4">
-                      <span className="text-slate-400">Connections:</span>
-                      <span className="text-white font-mono">{edges.length}</span>
-                    </div>
-                    <div className="flex justify-between gap-4">
                       <span className="text-slate-400">Parameters:</span>
                       <span className="text-purple-400 font-mono">{formatParams(calculateParameters())}</span>
                     </div>
@@ -528,6 +603,7 @@ const Canvas = () => {
           {/* Training Canvas */}
           {activeTab === 'training' && (
             <TrainingCanvas
+              key={trainingKey}
               onStartTraining={() => setActiveTab('monitor')}
               modelNodes={nodes}
               modelEdges={edges}
@@ -535,6 +611,30 @@ const Canvas = () => {
               trainingEdges={trainingEdges}
               setTrainingNodes={setTrainingNodes}
               setTrainingEdges={setTrainingEdges}
+            />
+          )}
+
+          {/* SFT Canvas */}
+          {activeTab === 'sft' && (
+            <SFTCanvas
+              key={sftKey}
+              onStartTraining={() => setActiveTab('monitor')}
+              sftNodes={sftNodes}
+              sftEdges={sftEdges}
+              setSftNodes={setSftNodes}
+              setSftEdges={setSftEdges}
+            />
+          )}
+
+          {/* RLHF Canvas */}
+          {activeTab === 'rlhf' && (
+            <RLHFCanvas
+              key={rlhfKey}
+              onStartTraining={() => setActiveTab('monitor')}
+              rlhfNodes={rlhfNodes}
+              rlhfEdges={rlhfEdges}
+              setRlhfNodes={setRlhfNodes}
+              setRlhfEdges={setRlhfEdges}
             />
           )}
 

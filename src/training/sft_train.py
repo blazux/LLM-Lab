@@ -110,14 +110,18 @@ def setup_sft_scheduler(optimizer, config: SFTConfig):
     return scheduler
 
 
-def train_sft(config: SFTConfig):
+def train_sft(config: SFTConfig, callback=None):
     """
     Supervised Fine-Tuning training function
 
     Args:
         config: SFT configuration
+        callback: Optional callback object with methods on_step, on_eval, on_log
     """
     os.makedirs(config.output_dir, exist_ok=True)
+
+    # Save configuration file for reproducibility
+    config.save(f"{config.output_dir}/sft_config.json")
 
     # Load checkpoint to get model config and weights
     print(f"\n🔄 Loading policy model from {config.policy_checkpoint}...")
@@ -416,6 +420,11 @@ def train_sft(config: SFTConfig):
                 'ppl': f'{perplexity:.1f}',
                 'lr': f'{optimizers[0].param_groups[0]["lr"]:.2e}'
             })
+
+            # Callback for metrics
+            if callback and hasattr(callback, 'on_step'):
+                current_lr = optimizers[0].param_groups[0]['lr']
+                callback.on_step(step, current_loss, current_lr, perplexity)
 
         # Evaluation
         if step % config.eval_every == 0 and step > 0:

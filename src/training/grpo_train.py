@@ -431,11 +431,19 @@ def grpo_update(
     return avg_policy_loss, avg_entropy
 
 
-def train_grpo(config: RLHFConfig):
-    """Main GRPO training loop"""
+def train_grpo(config: RLHFConfig, callback=None):
+    """Main GRPO training loop
+
+    Args:
+        config: RLHF configuration
+        callback: Optional callback object with methods on_step, on_eval, on_log
+    """
     print("\n" + "=" * 60)
     print("RLHF Training with GRPO")
     print("=" * 60 + "\n")
+
+    if callback and hasattr(callback, 'on_log'):
+        callback.on_log("Starting GRPO training...", "info")
 
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -593,6 +601,11 @@ def train_grpo(config: RLHFConfig):
                       f"Policy Loss {policy_loss:.4f} {policy_loss_trend} | "
                       f"Entropy {entropy:.4f} {entropy_trend} | "
                       f"ETA: {eta_minutes:.1f}m")
+
+                # Callback for metrics
+                if callback and hasattr(callback, 'on_step'):
+                    current_lr = optimizer.param_groups[0]['lr']
+                    callback.on_step(step, policy_loss, current_lr, None)
 
                 # Update previous values
                 prev_reward = avg_reward

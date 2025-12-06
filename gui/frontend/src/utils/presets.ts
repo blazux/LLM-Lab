@@ -16,6 +16,14 @@ export interface TrainingPreset {
   edges: Edge[];
 }
 
+export interface RLHFPreset {
+  id: string;
+  name: string;
+  description: string;
+  nodes: Node[];
+  edges: Edge[];
+}
+
 // Model Architecture Presets
 export const MODEL_PRESETS: ModelPreset[] = [
   {
@@ -236,6 +244,171 @@ export const MODEL_PRESETS: ModelPreset[] = [
   },
 ];
 
+// SFT Configuration Presets
+export interface SFTPreset {
+  id: string;
+  name: string;
+  description: string;
+  nodes: Node[];
+  edges: Edge[];
+}
+
+export const SFT_PRESETS: SFTPreset[] = [
+  {
+    id: 'sft-basic',
+    name: 'Basic SFT',
+    description: 'Simple supervised fine-tuning setup',
+    nodes: [
+      {
+        id: 'basemodel-1',
+        type: 'basemodel',
+        position: { x: 400, y: 400 },
+        data: {
+          label: 'Base Model',
+          checkpoint_path: 'checkpoints/best_model.pt',
+        },
+      },
+      {
+        id: 'dataset-1',
+        type: 'dataset',
+        position: { x: 100, y: 400 },
+        data: {
+          label: 'Dataset',
+          dataset_name: 'HuggingFaceFW/fineweb-edu',
+          split: 'train',
+          weight: 1.0,
+        },
+      },
+      {
+        id: 'adamw-1',
+        type: 'adamw',
+        position: { x: 400, y: 300 },
+        data: {
+          label: 'AdamW',
+          lr: 0.00001,
+          beta1: 0.9,
+          beta2: 0.999,
+          eps: 1e-8,
+        },
+      },
+      {
+        id: 'cosine-1',
+        type: 'cosine',
+        position: { x: 400, y: 200 },
+        data: {
+          label: 'Cosine Scheduler',
+          warmup_steps: 100,
+        },
+      },
+      {
+        id: 'hyperparams-1',
+        type: 'hyperparams',
+        position: { x: 400, y: 100 },
+        data: {
+          label: 'Hyperparameters',
+          batch_size: 8,
+          gradient_accumulation_steps: 4,
+          max_steps: 1000,
+          warmup_steps: 100,
+          lr: 0.0001,
+          grad_clip: 1.0,
+          eval_every: 100,
+          eval_steps: 50,
+        },
+      },
+    ],
+    edges: [
+      { id: 'e1', source: 'dataset-1', target: 'basemodel-1' },
+      { id: 'e2', source: 'basemodel-1', target: 'adamw-1' },
+      { id: 'e3', source: 'adamw-1', target: 'cosine-1' },
+      { id: 'e4', source: 'cosine-1', target: 'hyperparams-1' },
+    ],
+  },
+  {
+    id: 'sft-lora',
+    name: 'SFT with LoRA',
+    description: 'Memory-efficient fine-tuning with LoRA',
+    nodes: [
+      {
+        id: 'basemodel-1',
+        type: 'basemodel',
+        position: { x: 400, y: 400 },
+        data: {
+          label: 'Base Model',
+          checkpoint_path: 'checkpoints/best_model.pt',
+        },
+      },
+      {
+        id: 'dataset-1',
+        type: 'dataset',
+        position: { x: 100, y: 400 },
+        data: {
+          label: 'Dataset',
+          dataset_name: 'HuggingFaceFW/fineweb-edu',
+          split: 'train',
+          weight: 1.0,
+        },
+      },
+      {
+        id: 'lora-1',
+        type: 'lora',
+        position: { x: 400, y: 300 },
+        data: {
+          label: 'LoRA',
+          preset: 'attention_only',
+          lora_r: 8,
+          lora_alpha: 16,
+          lora_dropout: 0.05,
+        },
+      },
+      {
+        id: 'adamw-1',
+        type: 'adamw',
+        position: { x: 400, y: 200 },
+        data: {
+          label: 'AdamW',
+          lr: 0.0001,
+          beta1: 0.9,
+          beta2: 0.999,
+          eps: 1e-8,
+        },
+      },
+      {
+        id: 'cosine-1',
+        type: 'cosine',
+        position: { x: 400, y: 100 },
+        data: {
+          label: 'Cosine Scheduler',
+          warmup_steps: 200,
+        },
+      },
+      {
+        id: 'hyperparams-1',
+        type: 'hyperparams',
+        position: { x: 400, y: 0 },
+        data: {
+          label: 'Hyperparameters',
+          batch_size: 16,
+          gradient_accumulation_steps: 2,
+          max_steps: 2000,
+          warmup_steps: 200,
+          lr: 0.0003,
+          grad_clip: 1.0,
+          eval_every: 200,
+          eval_steps: 50,
+        },
+      },
+    ],
+    edges: [
+      { id: 'e1', source: 'dataset-1', target: 'basemodel-1' },
+      { id: 'e2', source: 'basemodel-1', target: 'lora-1' },
+      { id: 'e3', source: 'lora-1', target: 'adamw-1' },
+      { id: 'e4', source: 'adamw-1', target: 'cosine-1' },
+      { id: 'e5', source: 'cosine-1', target: 'hyperparams-1' },
+    ],
+  },
+];
+
 // Training Configuration Presets
 export const TRAINING_PRESETS: TrainingPreset[] = [
   {
@@ -252,7 +425,7 @@ export const TRAINING_PRESETS: TrainingPreset[] = [
       {
         id: 'dataset-1',
         type: 'dataset',
-        position: { x: 100, y: 300 },
+        position: { x: 100, y: 400 },
         data: {
           label: 'Dataset',
           dataset_name: 'HuggingFaceFW/fineweb-edu',
@@ -262,19 +435,19 @@ export const TRAINING_PRESETS: TrainingPreset[] = [
       {
         id: 'adamw-1',
         type: 'adamw',
-        position: { x: 250, y: 300 },
+        position: { x: 400, y: 300 },
         data: { label: 'AdamW' },
       },
       {
         id: 'cosine-1',
         type: 'cosine',
-        position: { x: 400, y: 300 },
+        position: { x: 400, y: 200 },
         data: { label: 'Cosine Scheduler' },
       },
       {
         id: 'hyperparams-1',
         type: 'hyperparams',
-        position: { x: 550, y: 300 },
+        position: { x: 400, y: 100 },
         data: {
           label: 'Hyperparameters',
           batch_size: 4,
@@ -290,9 +463,9 @@ export const TRAINING_PRESETS: TrainingPreset[] = [
     ],
     edges: [
       { id: 'e1', source: 'dataset-1', target: 'model-1' },
-      { id: 'e2', source: 'adamw-1', target: 'model-1' },
-      { id: 'e3', source: 'cosine-1', target: 'model-1' },
-      { id: 'e4', source: 'hyperparams-1', target: 'model-1' },
+      { id: 'e2', source: 'model-1', target: 'adamw-1' },
+      { id: 'e3', source: 'adamw-1', target: 'cosine-1' },
+      { id: 'e4', source: 'cosine-1', target: 'hyperparams-1' },
     ],
   },
   {
@@ -309,7 +482,7 @@ export const TRAINING_PRESETS: TrainingPreset[] = [
       {
         id: 'dataset-1',
         type: 'dataset',
-        position: { x: 100, y: 300 },
+        position: { x: 100, y: 400 },
         data: {
           label: 'Dataset',
           dataset_name: 'HuggingFaceFW/fineweb-edu',
@@ -319,19 +492,19 @@ export const TRAINING_PRESETS: TrainingPreset[] = [
       {
         id: 'adamw-1',
         type: 'adamw',
-        position: { x: 250, y: 300 },
+        position: { x: 400, y: 300 },
         data: { label: 'AdamW' },
       },
       {
         id: 'cosine-1',
         type: 'cosine',
-        position: { x: 400, y: 300 },
+        position: { x: 400, y: 200 },
         data: { label: 'Cosine Scheduler' },
       },
       {
         id: 'hyperparams-1',
         type: 'hyperparams',
-        position: { x: 550, y: 300 },
+        position: { x: 400, y: 100 },
         data: {
           label: 'Hyperparameters',
           batch_size: 8,
@@ -348,9 +521,9 @@ export const TRAINING_PRESETS: TrainingPreset[] = [
     ],
     edges: [
       { id: 'e1', source: 'dataset-1', target: 'model-1' },
-      { id: 'e2', source: 'adamw-1', target: 'model-1' },
-      { id: 'e3', source: 'cosine-1', target: 'model-1' },
-      { id: 'e4', source: 'hyperparams-1', target: 'model-1' },
+      { id: 'e2', source: 'model-1', target: 'adamw-1' },
+      { id: 'e3', source: 'adamw-1', target: 'cosine-1' },
+      { id: 'e4', source: 'cosine-1', target: 'hyperparams-1' },
     ],
   },
   {
@@ -367,7 +540,7 @@ export const TRAINING_PRESETS: TrainingPreset[] = [
       {
         id: 'dataset-1',
         type: 'dataset',
-        position: { x: 100, y: 300 },
+        position: { x: 100, y: 400 },
         data: {
           label: 'Dataset',
           dataset_name: 'HuggingFaceFW/fineweb-edu',
@@ -377,19 +550,19 @@ export const TRAINING_PRESETS: TrainingPreset[] = [
       {
         id: 'muon-1',
         type: 'muon',
-        position: { x: 250, y: 300 },
+        position: { x: 400, y: 300 },
         data: { label: 'Muon' },
       },
       {
         id: 'cosine-1',
         type: 'cosine',
-        position: { x: 400, y: 300 },
+        position: { x: 400, y: 200 },
         data: { label: 'Cosine Scheduler' },
       },
       {
         id: 'hyperparams-1',
         type: 'hyperparams',
-        position: { x: 550, y: 300 },
+        position: { x: 400, y: 100 },
         data: {
           label: 'Hyperparameters',
           batch_size: 16,
@@ -406,9 +579,439 @@ export const TRAINING_PRESETS: TrainingPreset[] = [
     ],
     edges: [
       { id: 'e1', source: 'dataset-1', target: 'model-1' },
-      { id: 'e2', source: 'muon-1', target: 'model-1' },
-      { id: 'e3', source: 'cosine-1', target: 'model-1' },
-      { id: 'e4', source: 'hyperparams-1', target: 'model-1' },
+      { id: 'e2', source: 'model-1', target: 'muon-1' },
+      { id: 'e3', source: 'muon-1', target: 'cosine-1' },
+      { id: 'e4', source: 'cosine-1', target: 'hyperparams-1' },
+    ],
+  },
+];
+
+// RLHF Configuration Presets
+export const RLHF_PRESETS: RLHFPreset[] = [
+  {
+    id: 'ppo-basic',
+    name: 'PPO Training',
+    description: 'Proximal Policy Optimization with reward model',
+    nodes: [
+      {
+        id: 'basemodel-1',
+        type: 'basemodel',
+        position: { x: 400, y: 400 },
+        data: {
+          label: 'Policy Model',
+          checkpoint_path: 'checkpoints/best_model.pt',
+        },
+      },
+      {
+        id: 'ppo_reward-1',
+        type: 'ppo_reward',
+        position: { x: 400, y: 550 },
+        data: {
+          label: 'PPO Reward Model',
+          model_name: 'OpenAssistant/reward-model-deberta-v3-large-v2',
+        },
+      },
+      {
+        id: 'dataset-1',
+        type: 'dataset',
+        position: { x: 100, y: 400 },
+        data: {
+          label: 'Dataset',
+          dataset_name: 'Anthropic/hh-rlhf',
+          split: 'train',
+          weight: 1.0,
+        },
+      },
+      {
+        id: 'adamw-1',
+        type: 'adamw',
+        position: { x: 400, y: 300 },
+        data: {
+          label: 'AdamW',
+          lr: 0.00001,
+          beta1: 0.9,
+          beta2: 0.999,
+          eps: 1e-8,
+        },
+      },
+      {
+        id: 'cosine-1',
+        type: 'cosine',
+        position: { x: 400, y: 200 },
+        data: {
+          label: 'Cosine Scheduler',
+          warmup_steps: 100,
+        },
+      },
+      {
+        id: 'rlhf_hyperparams-1',
+        type: 'rlhf_hyperparams',
+        position: { x: 400, y: 100 },
+        data: {
+          label: 'RLHF Hyperparameters',
+          batch_size: 128,
+          mini_batch_size: 32,
+          learning_rate: 0.000014,
+          max_steps: 1000,
+          max_new_tokens: 128,
+          ppo_epochs: 4,
+          clip_range: 0.2,
+          gamma: 1.0,
+          gae_lambda: 0.95,
+          vf_coef: 0.1,
+        },
+      },
+    ],
+    edges: [
+      { id: 'e1', source: 'ppo_reward-1', target: 'basemodel-1', targetHandle: 'bottom' },
+      { id: 'e2', source: 'dataset-1', target: 'basemodel-1', targetHandle: 'left' },
+      { id: 'e3', source: 'basemodel-1', target: 'adamw-1', sourceHandle: 'top' },
+      { id: 'e4', source: 'adamw-1', target: 'cosine-1' },
+      { id: 'e5', source: 'cosine-1', target: 'rlhf_hyperparams-1' },
+    ],
+  },
+  {
+    id: 'dpo-basic',
+    name: 'DPO Training',
+    description: 'Direct Preference Optimization without reward model',
+    nodes: [
+      {
+        id: 'basemodel-1',
+        type: 'basemodel',
+        position: { x: 400, y: 400 },
+        data: {
+          label: 'Policy Model',
+          checkpoint_path: 'checkpoints/best_model.pt',
+        },
+      },
+      {
+        id: 'dpo_reference-1',
+        type: 'dpo_reference',
+        position: { x: 400, y: 550 },
+        data: {
+          label: 'DPO Reference Model',
+          checkpoint_path: '',
+        },
+      },
+      {
+        id: 'dataset-1',
+        type: 'dataset',
+        position: { x: 100, y: 400 },
+        data: {
+          label: 'Dataset',
+          dataset_name: 'Anthropic/hh-rlhf',
+          split: 'train',
+          weight: 1.0,
+        },
+      },
+      {
+        id: 'adamw-1',
+        type: 'adamw',
+        position: { x: 400, y: 300 },
+        data: {
+          label: 'AdamW',
+          lr: 0.00001,
+          beta1: 0.9,
+          beta2: 0.999,
+          eps: 1e-8,
+        },
+      },
+      {
+        id: 'cosine-1',
+        type: 'cosine',
+        position: { x: 400, y: 200 },
+        data: {
+          label: 'Cosine Scheduler',
+          warmup_steps: 100,
+        },
+      },
+      {
+        id: 'rlhf_hyperparams-1',
+        type: 'rlhf_hyperparams',
+        position: { x: 400, y: 100 },
+        data: {
+          label: 'RLHF Hyperparameters',
+          batch_size: 128,
+          mini_batch_size: 32,
+          learning_rate: 0.000014,
+          max_steps: 1000,
+          max_new_tokens: 128,
+          clip_range: 0.2,
+        },
+      },
+    ],
+    edges: [
+      { id: 'e1', source: 'dpo_reference-1', target: 'basemodel-1', targetHandle: 'bottom' },
+      { id: 'e2', source: 'dataset-1', target: 'basemodel-1', targetHandle: 'left' },
+      { id: 'e3', source: 'basemodel-1', target: 'adamw-1', sourceHandle: 'top' },
+      { id: 'e4', source: 'adamw-1', target: 'cosine-1' },
+      { id: 'e5', source: 'cosine-1', target: 'rlhf_hyperparams-1' },
+    ],
+  },
+  {
+    id: 'grpo-basic',
+    name: 'GRPO Training',
+    description: 'Group Relative Policy Optimization with reward model',
+    nodes: [
+      {
+        id: 'basemodel-1',
+        type: 'basemodel',
+        position: { x: 400, y: 400 },
+        data: {
+          label: 'Policy Model',
+          checkpoint_path: 'checkpoints/best_model.pt',
+        },
+      },
+      {
+        id: 'grpo_reward-1',
+        type: 'grpo_reward',
+        position: { x: 400, y: 550 },
+        data: {
+          label: 'GRPO Reward Model',
+          model_name: 'OpenAssistant/reward-model-deberta-v3-large-v2',
+        },
+      },
+      {
+        id: 'dataset-1',
+        type: 'dataset',
+        position: { x: 100, y: 400 },
+        data: {
+          label: 'Dataset',
+          dataset_name: 'Anthropic/hh-rlhf',
+          split: 'train',
+          weight: 1.0,
+        },
+      },
+      {
+        id: 'adamw-1',
+        type: 'adamw',
+        position: { x: 400, y: 300 },
+        data: {
+          label: 'AdamW',
+          lr: 0.00001,
+          beta1: 0.9,
+          beta2: 0.999,
+          eps: 1e-8,
+        },
+      },
+      {
+        id: 'cosine-1',
+        type: 'cosine',
+        position: { x: 400, y: 200 },
+        data: {
+          label: 'Cosine Scheduler',
+          warmup_steps: 100,
+        },
+      },
+      {
+        id: 'rlhf_hyperparams-1',
+        type: 'rlhf_hyperparams',
+        position: { x: 400, y: 100 },
+        data: {
+          label: 'RLHF Hyperparameters',
+          batch_size: 128,
+          mini_batch_size: 32,
+          learning_rate: 0.000014,
+          max_steps: 1000,
+          max_new_tokens: 128,
+          group_size: 4,
+          grpo_temperature: 1.0,
+          ppo_epochs: 4,
+        },
+      },
+    ],
+    edges: [
+      { id: 'e1', source: 'grpo_reward-1', target: 'basemodel-1', targetHandle: 'bottom' },
+      { id: 'e2', source: 'dataset-1', target: 'basemodel-1', targetHandle: 'left' },
+      { id: 'e3', source: 'basemodel-1', target: 'adamw-1', sourceHandle: 'top' },
+      { id: 'e4', source: 'adamw-1', target: 'cosine-1' },
+      { id: 'e5', source: 'cosine-1', target: 'rlhf_hyperparams-1' },
+    ],
+  },
+  {
+    id: 'ppo-lora',
+    name: 'PPO with LoRA',
+    description: 'Memory-efficient PPO training with LoRA',
+    nodes: [
+      {
+        id: 'basemodel-1',
+        type: 'basemodel',
+        position: { x: 400, y: 400 },
+        data: {
+          label: 'Policy Model',
+          checkpoint_path: 'checkpoints/best_model.pt',
+        },
+      },
+      {
+        id: 'ppo_reward-1',
+        type: 'ppo_reward',
+        position: { x: 400, y: 550 },
+        data: {
+          label: 'PPO Reward Model',
+          model_name: 'OpenAssistant/reward-model-deberta-v3-large-v2',
+        },
+      },
+      {
+        id: 'dataset-1',
+        type: 'dataset',
+        position: { x: 100, y: 400 },
+        data: {
+          label: 'Dataset',
+          dataset_name: 'Anthropic/hh-rlhf',
+          split: 'train',
+          weight: 1.0,
+        },
+      },
+      {
+        id: 'lora-1',
+        type: 'lora',
+        position: { x: 400, y: 300 },
+        data: {
+          label: 'LoRA',
+          preset: 'attention_only',
+          lora_r: 8,
+          lora_alpha: 16,
+          lora_dropout: 0.05,
+        },
+      },
+      {
+        id: 'adamw-1',
+        type: 'adamw',
+        position: { x: 400, y: 200 },
+        data: {
+          label: 'AdamW',
+          lr: 0.00001,
+          beta1: 0.9,
+          beta2: 0.999,
+          eps: 1e-8,
+        },
+      },
+      {
+        id: 'cosine-1',
+        type: 'cosine',
+        position: { x: 400, y: 100 },
+        data: {
+          label: 'Cosine Scheduler',
+          warmup_steps: 100,
+        },
+      },
+      {
+        id: 'rlhf_hyperparams-1',
+        type: 'rlhf_hyperparams',
+        position: { x: 400, y: 0 },
+        data: {
+          label: 'RLHF Hyperparameters',
+          batch_size: 64,
+          mini_batch_size: 16,
+          learning_rate: 0.00003,
+          max_steps: 2000,
+          max_new_tokens: 128,
+          ppo_epochs: 4,
+          clip_range: 0.2,
+          gamma: 1.0,
+          gae_lambda: 0.95,
+          vf_coef: 0.1,
+        },
+      },
+    ],
+    edges: [
+      { id: 'e1', source: 'ppo_reward-1', target: 'basemodel-1', targetHandle: 'bottom' },
+      { id: 'e2', source: 'dataset-1', target: 'basemodel-1', targetHandle: 'left' },
+      { id: 'e3', source: 'basemodel-1', target: 'lora-1', sourceHandle: 'top' },
+      { id: 'e4', source: 'lora-1', target: 'adamw-1' },
+      { id: 'e5', source: 'adamw-1', target: 'cosine-1' },
+      { id: 'e6', source: 'cosine-1', target: 'rlhf_hyperparams-1' },
+    ],
+  },
+  {
+    id: 'dpo-lora',
+    name: 'DPO with LoRA',
+    description: 'Memory-efficient DPO training with LoRA',
+    nodes: [
+      {
+        id: 'basemodel-1',
+        type: 'basemodel',
+        position: { x: 400, y: 400 },
+        data: {
+          label: 'Policy Model',
+          checkpoint_path: 'checkpoints/best_model.pt',
+        },
+      },
+      {
+        id: 'dpo_reference-1',
+        type: 'dpo_reference',
+        position: { x: 400, y: 550 },
+        data: {
+          label: 'DPO Reference Model',
+          checkpoint_path: '',
+        },
+      },
+      {
+        id: 'dataset-1',
+        type: 'dataset',
+        position: { x: 100, y: 400 },
+        data: {
+          label: 'Dataset',
+          dataset_name: 'Anthropic/hh-rlhf',
+          split: 'train',
+          weight: 1.0,
+        },
+      },
+      {
+        id: 'lora-1',
+        type: 'lora',
+        position: { x: 400, y: 300 },
+        data: {
+          label: 'LoRA',
+          preset: 'attention_only',
+          lora_r: 8,
+          lora_alpha: 16,
+          lora_dropout: 0.05,
+        },
+      },
+      {
+        id: 'adamw-1',
+        type: 'adamw',
+        position: { x: 400, y: 200 },
+        data: {
+          label: 'AdamW',
+          lr: 0.00001,
+          beta1: 0.9,
+          beta2: 0.999,
+          eps: 1e-8,
+        },
+      },
+      {
+        id: 'cosine-1',
+        type: 'cosine',
+        position: { x: 400, y: 100 },
+        data: {
+          label: 'Cosine Scheduler',
+          warmup_steps: 100,
+        },
+      },
+      {
+        id: 'rlhf_hyperparams-1',
+        type: 'rlhf_hyperparams',
+        position: { x: 400, y: 0 },
+        data: {
+          label: 'RLHF Hyperparameters',
+          batch_size: 64,
+          mini_batch_size: 16,
+          learning_rate: 0.00003,
+          max_steps: 2000,
+          max_new_tokens: 128,
+          clip_range: 0.2,
+        },
+      },
+    ],
+    edges: [
+      { id: 'e1', source: 'dpo_reference-1', target: 'basemodel-1', targetHandle: 'bottom' },
+      { id: 'e2', source: 'dataset-1', target: 'basemodel-1', targetHandle: 'left' },
+      { id: 'e3', source: 'basemodel-1', target: 'lora-1', sourceHandle: 'top' },
+      { id: 'e4', source: 'lora-1', target: 'adamw-1' },
+      { id: 'e5', source: 'adamw-1', target: 'cosine-1' },
+      { id: 'e6', source: 'cosine-1', target: 'rlhf_hyperparams-1' },
     ],
   },
 ];

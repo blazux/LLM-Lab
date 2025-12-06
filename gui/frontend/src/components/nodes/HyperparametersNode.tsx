@@ -8,7 +8,6 @@ interface HyperparametersNodeProps {
     batch_size?: number;
     gradient_accumulation_steps?: number;
     max_steps?: number;
-    warmup_steps?: number;
     grad_clip?: number;
     eval_every?: number;
     eval_steps?: number;

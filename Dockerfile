@@ -45,7 +45,7 @@ COPY llm-lab.sh ./
 COPY --from=frontend-builder /app/gui/frontend/dist ./gui/frontend/dist
 
 # Create necessary directories
-RUN mkdir -p cache checkpoints gui/backend/cache gui/backend/checkpoints
+RUN mkdir -p cache outputs/pretraining outputs/sft outputs/rlhf gui/backend/cache
 
 # Expose port
 EXPOSE 8000

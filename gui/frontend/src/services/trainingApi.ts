@@ -72,6 +72,49 @@ export interface TrainingConfigData {
   sophia_rho?: number;
 }
 
+export interface SFTConfigData {
+  policy_checkpoint: string;
+  datasets: Array<{
+    name: string;
+    subset?: string;
+    split: string;
+    weight: number;
+  }>;
+  optimizer: string;
+  lr: number;
+  weight_decay: number;
+  batch_size: number;
+  gradient_accumulation_steps: number;
+  max_steps: number;
+  warmup_steps: number;
+  scheduler: string;
+  max_grad_norm: number;
+  log_every: number;
+  save_every: number;
+  eval_every: number;
+  eval_steps: number;
+  save_best_only: boolean;
+  output_dir: string;
+  // LoRA configuration
+  use_lora: boolean;
+  lora_preset?: string;
+  lora_target_modules?: string[];
+  lora_r?: number;
+  lora_alpha?: number;
+  lora_dropout?: number;
+  // Optimizer-specific params
+  adamw_beta1?: number;
+  adamw_beta2?: number;
+  adamw_eps?: number;
+  muon_momentum?: number;
+  muon_nesterov?: boolean;
+  lion_beta1?: number;
+  lion_beta2?: number;
+  sophia_beta1?: number;
+  sophia_beta2?: number;
+  sophia_rho?: number;
+}
+
 export async function startTraining(
   modelConfig: ModelConfigData,
   trainingConfig: TrainingConfigData,
@@ -94,6 +137,96 @@ export async function startTraining(
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.detail || 'Failed to start training');
+  }
+
+  return response.json();
+}
+
+export async function startSFT(sftConfig: SFTConfigData): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/training/sft/start`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(sftConfig),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to start SFT');
+  }
+
+  return response.json();
+}
+
+export interface RLHFConfigData {
+  algorithm: 'ppo' | 'dpo' | 'grpo';
+  policy_checkpoint: string;
+  datasets: Array<{
+    name: string;
+    subset?: string;
+    split: string;
+    weight: number;
+  }>;
+  optimizer: string;
+  learning_rate: number;
+  weight_decay: number;
+  batch_size: number;
+  mini_batch_size: number;
+  gradient_accumulation_steps: number;
+  max_steps: number;
+  max_grad_norm: number;
+  log_every: number;
+  save_every: number;
+  eval_every: number;
+  output_dir: string;
+  // Generation parameters
+  max_new_tokens: number;
+  temperature: number;
+  top_k: number;
+  top_p: number;
+  // LoRA configuration
+  use_lora: boolean;
+  lora_preset?: string;
+  lora_target_modules?: string[];
+  lora_r?: number;
+  lora_alpha?: number;
+  lora_dropout?: number;
+  // Optimizer-specific params
+  adamw_beta1?: number;
+  adamw_beta2?: number;
+  adamw_eps?: number;
+  muon_momentum?: number;
+  muon_nesterov?: boolean;
+  lion_beta1?: number;
+  lion_beta2?: number;
+  sophia_beta1?: number;
+  sophia_beta2?: number;
+  sophia_rho?: number;
+  // Algorithm-specific params
+  reward_model_name?: string;
+  reference_checkpoint?: string;
+  ppo_epochs?: number;
+  clip_range?: number;
+  gamma?: number;
+  gae_lambda?: number;
+  vf_coef?: number;
+  group_size?: number;
+  grpo_temperature?: number;
+}
+
+export async function startRLHF(rlhfConfig: RLHFConfigData): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/training/rlhf/start`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(rlhfConfig),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to start RLHF');
   }
 
   return response.json();

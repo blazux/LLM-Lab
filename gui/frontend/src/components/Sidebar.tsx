@@ -2,7 +2,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Blocks, Activity, X } from 'lucide-react';
 import { Node } from 'reactflow';
 import { useState } from 'react';
-import { MODEL_PRESETS, TRAINING_PRESETS } from '../utils/presets';
+import { MODEL_PRESETS, TRAINING_PRESETS, SFT_PRESETS, RLHF_PRESETS } from '../utils/presets';
 
 const MODEL_BLOCKS = [
   {
@@ -237,10 +237,260 @@ const TRAINING_BLOCKS = [
   },
 ];
 
+const SFT_BLOCKS = [
+  {
+    category: 'Base Model',
+    blocks: [
+      {
+        id: 'basemodel',
+        label: 'Base Model',
+        emoji: '🏗️',
+        color: 'from-blue-500 to-blue-700',
+        description: 'Pretrained checkpoint'
+      },
+    ]
+  },
+  {
+    category: 'Datasets',
+    blocks: [
+      {
+        id: 'dataset',
+        label: 'Dataset',
+        emoji: '📚',
+        color: 'from-blue-500 to-blue-700',
+        description: 'SFT dataset'
+      },
+    ]
+  },
+  {
+    category: 'Optimizers',
+    blocks: [
+      {
+        id: 'adamw',
+        label: 'AdamW',
+        emoji: '⚡',
+        color: 'from-red-500 to-red-700',
+        description: 'Adaptive moment estimation'
+      },
+      {
+        id: 'muon',
+        label: 'Muon',
+        emoji: '🚀',
+        color: 'from-orange-500 to-orange-700',
+        description: 'Momentum-based optimizer'
+      },
+      {
+        id: 'lion',
+        label: 'Lion',
+        emoji: '🦁',
+        color: 'from-amber-500 to-amber-700',
+        description: 'Evolved sign momentum'
+      },
+      {
+        id: 'sophia',
+        label: 'Sophia',
+        emoji: '🎓',
+        color: 'from-rose-500 to-rose-700',
+        description: 'Second-order optimizer'
+      },
+    ]
+  },
+  {
+    category: 'Schedulers',
+    blocks: [
+      {
+        id: 'cosine',
+        label: 'Cosine',
+        emoji: '📉',
+        color: 'from-purple-500 to-purple-700',
+        description: 'Cosine annealing'
+      },
+      {
+        id: 'linear',
+        label: 'Linear',
+        emoji: '📊',
+        color: 'from-violet-500 to-violet-700',
+        description: 'Linear decay'
+      },
+      {
+        id: 'polynomial',
+        label: 'Polynomial',
+        emoji: '📈',
+        color: 'from-fuchsia-500 to-fuchsia-700',
+        description: 'Polynomial decay'
+      },
+      {
+        id: 'constant',
+        label: 'Constant',
+        emoji: '➡️',
+        color: 'from-slate-500 to-slate-700',
+        description: 'Fixed learning rate'
+      },
+    ]
+  },
+  {
+    category: 'Configuration',
+    blocks: [
+      {
+        id: 'hyperparams',
+        label: 'Hyperparameters',
+        emoji: '⚙️',
+        color: 'from-green-500 to-green-700',
+        description: 'Batch size, steps, etc.'
+      },
+      {
+        id: 'lora',
+        label: 'LoRA',
+        emoji: '🎯',
+        color: 'from-purple-500 to-purple-700',
+        description: 'Parameter-efficient fine-tuning'
+      },
+    ]
+  },
+];
+
+const RLHF_BLOCKS = [
+  {
+    category: 'Base Model',
+    blocks: [
+      {
+        id: 'basemodel',
+        label: 'Policy Model',
+        emoji: '🏗️',
+        color: 'from-blue-500 to-blue-700',
+        description: 'Pretrained checkpoint'
+      },
+    ]
+  },
+  {
+    category: 'Algorithm (choose one)',
+    blocks: [
+      {
+        id: 'ppo_reward',
+        label: 'PPO Reward Model',
+        emoji: '🏆',
+        color: 'from-red-500 to-red-700',
+        description: 'Proximal Policy Optimization'
+      },
+      {
+        id: 'dpo_reference',
+        label: 'DPO Reference Model',
+        emoji: '🎯',
+        color: 'from-blue-500 to-blue-700',
+        description: 'Direct Preference Optimization'
+      },
+      {
+        id: 'grpo_reward',
+        label: 'GRPO Reward Model',
+        emoji: '👥',
+        color: 'from-green-500 to-green-700',
+        description: 'Group Relative Policy Optimization'
+      },
+    ]
+  },
+  {
+    category: 'Datasets',
+    blocks: [
+      {
+        id: 'dataset',
+        label: 'Dataset',
+        emoji: '📚',
+        color: 'from-blue-500 to-blue-700',
+        description: 'RLHF dataset'
+      },
+    ]
+  },
+  {
+    category: 'Optimizers',
+    blocks: [
+      {
+        id: 'adamw',
+        label: 'AdamW',
+        emoji: '⚡',
+        color: 'from-red-500 to-red-700',
+        description: 'Adaptive moment estimation'
+      },
+      {
+        id: 'muon',
+        label: 'Muon',
+        emoji: '🚀',
+        color: 'from-orange-500 to-orange-700',
+        description: 'Momentum-based optimizer'
+      },
+      {
+        id: 'lion',
+        label: 'Lion',
+        emoji: '🦁',
+        color: 'from-amber-500 to-amber-700',
+        description: 'Evolved sign momentum'
+      },
+      {
+        id: 'sophia',
+        label: 'Sophia',
+        emoji: '🎓',
+        color: 'from-rose-500 to-rose-700',
+        description: 'Second-order optimizer'
+      },
+    ]
+  },
+  {
+    category: 'Schedulers',
+    blocks: [
+      {
+        id: 'cosine',
+        label: 'Cosine',
+        emoji: '📉',
+        color: 'from-purple-500 to-purple-700',
+        description: 'Cosine annealing'
+      },
+      {
+        id: 'linear',
+        label: 'Linear',
+        emoji: '📊',
+        color: 'from-violet-500 to-violet-700',
+        description: 'Linear decay'
+      },
+      {
+        id: 'polynomial',
+        label: 'Polynomial',
+        emoji: '📈',
+        color: 'from-fuchsia-500 to-fuchsia-700',
+        description: 'Polynomial decay'
+      },
+      {
+        id: 'constant',
+        label: 'Constant',
+        emoji: '➡️',
+        color: 'from-slate-500 to-slate-700',
+        description: 'Fixed learning rate'
+      },
+    ]
+  },
+  {
+    category: 'Configuration',
+    blocks: [
+      {
+        id: 'rlhf_hyperparams',
+        label: 'RLHF Hyperparameters',
+        emoji: '⚙️',
+        color: 'from-amber-500 to-amber-700',
+        description: 'Batch size, steps, etc.'
+      },
+      {
+        id: 'lora',
+        label: 'LoRA',
+        emoji: '🎯',
+        color: 'from-purple-500 to-purple-700',
+        description: 'Parameter-efficient fine-tuning'
+      },
+    ]
+  },
+];
+
 interface SidebarProps {
   nodes: Node[];
   onGenerateConfig: () => void;
-  activeTab: 'model' | 'training' | 'monitor' | 'inference';
+  activeTab: 'model' | 'training' | 'sft' | 'rlhf' | 'monitor' | 'inference';
   onLoadPreset?: (nodes: Node[], edges: any[]) => void;
   onClearCanvas?: () => void;
 }
@@ -265,6 +515,10 @@ const Sidebar = ({ nodes, onGenerateConfig, activeTab, onLoadPreset, onClearCanv
 
   const description = activeTab === 'model'
     ? 'Drag blocks to build your model'
+    : activeTab === 'sft'
+    ? 'Drag blocks to configure SFT'
+    : activeTab === 'rlhf'
+    ? 'Drag blocks to configure RLHF'
     : 'Drag blocks to configure training';
 
   return (
@@ -277,9 +531,9 @@ const Sidebar = ({ nodes, onGenerateConfig, activeTab, onLoadPreset, onClearCanv
         <p className="text-slate-400 text-sm">{description}</p>
       </div>
 
-      {activeTab === 'model' ? (
+      {activeTab === 'model' || activeTab === 'training' || activeTab === 'sft' || activeTab === 'rlhf' ? (
         <div className="space-y-6">
-          {MODEL_BLOCKS.map((section, sectionIndex) => (
+          {(activeTab === 'model' ? MODEL_BLOCKS : activeTab === 'sft' ? SFT_BLOCKS : activeTab === 'rlhf' ? RLHF_BLOCKS : TRAINING_BLOCKS).map((section, sectionIndex) => (
             <div key={section.category}>
               <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
                 {section.category}
@@ -325,51 +579,7 @@ const Sidebar = ({ nodes, onGenerateConfig, activeTab, onLoadPreset, onClearCanv
             </div>
           ))}
         </div>
-      ) : (
-        <div className="space-y-6">
-          {TRAINING_BLOCKS.map((section, sectionIndex) => (
-            <div key={section.category}>
-              <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
-                {section.category}
-              </h2>
-              <div className="space-y-3">
-                {section.blocks.map((block, blockIndex) => (
-                  <div
-                    key={block.id}
-                    draggable
-                    onDragStart={(e) => onDragStart(e, block.id, block.label)}
-                  >
-                    <motion.div
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: (sectionIndex * 0.5) + (blockIndex * 0.1) }}
-                      className={`
-                        p-4 rounded-lg cursor-grab active:cursor-grabbing
-                        bg-gradient-to-br ${block.color}
-                        border-2 border-opacity-50
-                        hover:scale-105 transition-transform duration-200
-                        shadow-lg hover:shadow-xl
-                      `}
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="text-3xl">{block.emoji}</div>
-                        <div className="flex-1">
-                          <div className="text-white font-semibold text-sm mb-1">
-                            {block.label}
-                          </div>
-                          <div className="text-white text-xs opacity-80">
-                            {block.description}
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      ) : null}
 
       <div className="mt-8 p-4 bg-slate-900 rounded-lg border border-slate-700">
         <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2">
@@ -377,7 +587,7 @@ const Sidebar = ({ nodes, onGenerateConfig, activeTab, onLoadPreset, onClearCanv
           Quick Actions
         </h3>
         <div className="space-y-2">
-          {(activeTab === 'model' || activeTab === 'training') && (
+          {(activeTab === 'model' || activeTab === 'training' || activeTab === 'sft' || activeTab === 'rlhf') && (
             <button
               onClick={() => setShowPresetModal(true)}
               className="w-full px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-md transition-colors"
@@ -385,7 +595,7 @@ const Sidebar = ({ nodes, onGenerateConfig, activeTab, onLoadPreset, onClearCanv
               Load Preset
             </button>
           )}
-          {(activeTab === 'model' || activeTab === 'training') && (
+          {(activeTab === 'model' || activeTab === 'training' || activeTab === 'sft' || activeTab === 'rlhf') && (
             <button
               onClick={onClearCanvas}
               className="w-full px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded-md transition-colors"
@@ -423,7 +633,7 @@ const Sidebar = ({ nodes, onGenerateConfig, activeTab, onLoadPreset, onClearCanv
             >
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-bold text-white">
-                  Load {activeTab === 'model' ? 'Model' : 'Training'} Preset
+                  Load {activeTab === 'model' ? 'Model' : activeTab === 'sft' ? 'SFT' : activeTab === 'rlhf' ? 'RLHF' : 'Training'} Preset
                 </h2>
                 <button
                   onClick={() => setShowPresetModal(false)}
@@ -434,7 +644,7 @@ const Sidebar = ({ nodes, onGenerateConfig, activeTab, onLoadPreset, onClearCanv
               </div>
 
               <div className="space-y-3">
-                {(activeTab === 'model' ? MODEL_PRESETS : TRAINING_PRESETS).map((preset) => (
+                {(activeTab === 'model' ? MODEL_PRESETS : activeTab === 'sft' ? SFT_PRESETS : activeTab === 'rlhf' ? RLHF_PRESETS : TRAINING_PRESETS).map((preset) => (
                   <button
                     key={preset.id}
                     onClick={() => {

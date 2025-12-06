@@ -2,16 +2,13 @@ __pycache__/
 cache/
 .vscode/
 .claude/
+# Old checkpoint directories (deprecated)
 checkpoints/*
 sft_checkpoints/*
 rlhf_checkpoints/*
-gui/backend/checkpoints/*
+# Centralized outputs directory
+outputs/*
 gui/backend/cache/*
-# Ignore all config files (user-specific)
-model_config*.json
-training_config*.json
-training_*.json
-sft_config*.json
-rlhf_config*.json
-model_*.json
-test*.json
+gui/backend/checkpoints/*
+*.json
+temp

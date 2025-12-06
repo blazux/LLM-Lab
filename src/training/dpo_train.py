@@ -294,11 +294,19 @@ def dpo_update(
     return total_loss, total_accuracy / num_mini_batches
 
 
-def train_dpo(config: RLHFConfig):
-    """Main DPO training loop"""
+def train_dpo(config: RLHFConfig, callback=None):
+    """Main DPO training loop
+
+    Args:
+        config: RLHF configuration
+        callback: Optional callback object with methods on_step, on_eval, on_log
+    """
     print("\n" + "=" * 60)
     print("RLHF Training with DPO")
     print("=" * 60 + "\n")
+
+    if callback and hasattr(callback, 'on_log'):
+        callback.on_log("Starting DPO training...", "info")
 
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -450,6 +458,11 @@ def train_dpo(config: RLHFConfig):
                       f"Loss {loss:.4f} {loss_trend} | "
                       f"Accuracy {accuracy:.1%} {acc_trend} | "
                       f"ETA: {eta_minutes:.1f}m")
+
+                # Callback for metrics
+                if callback and hasattr(callback, 'on_step'):
+                    current_lr = optimizer.param_groups[0]['lr']
+                    callback.on_step(step, loss, current_lr, None)
 
                 # Update previous values
                 prev_loss = loss

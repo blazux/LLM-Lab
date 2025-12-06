@@ -14,7 +14,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
-import ModelNode from './nodes/ModelNode';
+import BaseModelNode from './nodes/BaseModelNode';
 import DatasetNode from './nodes/DatasetNode';
 import AdamWNode from './nodes/AdamWNode';
 import MuonNode from './nodes/MuonNode';
@@ -25,15 +25,16 @@ import LinearSchedulerNode from './nodes/LinearSchedulerNode';
 import PolynomialSchedulerNode from './nodes/PolynomialSchedulerNode';
 import ConstantSchedulerNode from './nodes/ConstantSchedulerNode';
 import HyperparametersNode from './nodes/HyperparametersNode';
+import LoRANode from './nodes/LoRANode';
 import ConfigPanel from './ConfigPanel';
 import ValidationPanel from './ValidationPanel';
 import { Play } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useTraining } from '../context/TrainingContext';
-import { startTraining, ModelConfigData, TrainingConfigData } from '../services/trainingApi';
+import { startSFT, SFTConfigData } from '../services/trainingApi';
 
 const nodeTypes = {
-  model: ModelNode,
+  basemodel: BaseModelNode,
   dataset: DatasetNode,
   adamw: AdamWNode,
   muon: MuonNode,
@@ -44,58 +45,54 @@ const nodeTypes = {
   polynomial: PolynomialSchedulerNode,
   constant: ConstantSchedulerNode,
   hyperparams: HyperparametersNode,
+  lora: LoRANode,
 };
 
 const initialNodes: Node[] = [
   {
-    id: 'model-1',
-    type: 'model',
+    id: 'basemodel-1',
+    type: 'basemodel',
     position: { x: 400, y: 300 },
     data: {
-      label: 'Model',
-      config_source: 'current',
-      resume_training: false,
+      label: 'Base Model',
+      checkpoint_path: 'checkpoints/best_model.pt',
     },
   },
 ];
 
-interface TrainingCanvasProps {
+interface SFTCanvasProps {
   onStartTraining: () => void;
-  modelNodes: Node[];
-  modelEdges: Edge[];
-  trainingNodes: Node[];
-  trainingEdges: Edge[];
-  setTrainingNodes: (nodes: Node[]) => void;
-  setTrainingEdges: (edges: Edge[]) => void;
+  sftNodes: Node[];
+  sftEdges: Edge[];
+  setSftNodes: (nodes: Node[]) => void;
+  setSftEdges: (edges: Edge[]) => void;
 }
 
-const TrainingCanvas = ({
+const SFTCanvas = ({
   onStartTraining,
-  modelNodes,
-  modelEdges,
-  trainingNodes,
-  trainingEdges,
-  setTrainingNodes,
-  setTrainingEdges
-}: TrainingCanvasProps) => {
+  sftNodes,
+  sftEdges,
+  setSftNodes,
+  setSftEdges
+}: SFTCanvasProps) => {
   const { updateTrainingState } = useTraining();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   // Use parent state for nodes/edges to persist across tab switches
-  const [nodes, setNodes, onNodesChange] = useNodesState(trainingNodes.length > 0 ? trainingNodes : initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(trainingEdges.length > 0 ? trainingEdges : []);
+  const [nodes, setNodes, onNodesChange] = useNodesState(sftNodes.length > 0 ? sftNodes : initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(sftEdges.length > 0 ? sftEdges : []);
 
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
 
   // Sync local state changes back to parent
   useEffect(() => {
-    setTrainingNodes(nodes);
-  }, [nodes, setTrainingNodes]);
+    setSftNodes(nodes);
+  }, [nodes, setSftNodes]);
 
   useEffect(() => {
-    setTrainingEdges(edges);
-  }, [edges, setTrainingEdges]);
+    setSftEdges(edges);
+  }, [edges, setSftEdges]);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -166,97 +163,74 @@ const TrainingCanvas = ({
     );
   }, [setNodes]);
 
-  const handleStartTraining = async () => {
+  const handleStartSFT = async () => {
     try {
-      // Check if model is configured
-      if (!modelNodes || !modelEdges) {
-        alert('Please design your model in the Model Architecture tab first');
-        return;
-      }
-
-      // Gather training config from nodes
-      const datasetNode = nodes.find(n => n.type === 'dataset');
+      // Gather SFT config from nodes
+      const baseModelNode = nodes.find(n => n.type === 'basemodel');
+      const datasetNodes = nodes.filter(n => n.type === 'dataset');
       const optimizerNode = nodes.find(n => ['adamw', 'muon', 'lion', 'sophia'].includes(n.type || ''));
       const schedulerNode = nodes.find(n => ['cosine', 'linear', 'polynomial', 'constant'].includes(n.type || ''));
       const hyperparamsNode = nodes.find(n => n.type === 'hyperparams');
+      const loraNode = nodes.find(n => n.type === 'lora');
 
-      if (!datasetNode) {
-        alert('Please add a Dataset node to the training canvas');
+      if (!baseModelNode) {
+        alert('Please add a Base Model node to specify which checkpoint to fine-tune');
+        return;
+      }
+      if (datasetNodes.length === 0) {
+        alert('Please add at least one Dataset node for SFT');
         return;
       }
       if (!optimizerNode) {
-        alert('Please add an Optimizer node to the training canvas');
+        alert('Please add an Optimizer node');
         return;
       }
 
-      // Build training config
-      const trainingConfig: TrainingConfigData = {
-        datasets: [{
-          name: datasetNode.data.dataset_name || 'HuggingFaceFW/fineweb-edu',
-          subset: datasetNode.data.subset,
-          split: datasetNode.data.split || 'train',
-          weight: 1.0
-        }],
+      // Build datasets config with weights
+      const datasets = datasetNodes.map(node => ({
+        name: node.data.dataset_name || 'HuggingFaceH4/ultrachat_200k',
+        subset: node.data.subset,
+        split: node.data.split || 'train_sft',
+        weight: node.data.weight || 1.0
+      }));
+
+      // Build SFT config
+      const sftConfig: SFTConfigData = {
+        policy_checkpoint: baseModelNode.data.checkpoint_path || 'checkpoints/best_model.pt',
+        datasets: datasets,
         optimizer: optimizerNode.type || 'adamw',
-        lr: optimizerNode.data.lr || hyperparamsNode?.data.lr || 0.001,
+        lr: optimizerNode.data.lr || hyperparamsNode?.data.lr || 5e-6,
         weight_decay: optimizerNode.data.weight_decay || hyperparamsNode?.data.weight_decay || 0.01,
         batch_size: hyperparamsNode?.data.batch_size || 4,
-        gradient_accumulation_steps: hyperparamsNode?.data.gradient_accumulation_steps || 1,
-        max_steps: hyperparamsNode?.data.max_steps || 10000,
-        warmup_steps: schedulerNode?.data.warmup_steps || 1000,
+        gradient_accumulation_steps: hyperparamsNode?.data.gradient_accumulation_steps || 16,
+        max_steps: hyperparamsNode?.data.max_steps || 5000,
+        warmup_steps: hyperparamsNode?.data.warmup_steps || schedulerNode?.data.warmup_steps || 100,
         scheduler: schedulerNode?.type || 'cosine',
-        grad_clip: hyperparamsNode?.data.grad_clip || 1.0,
+        max_grad_norm: hyperparamsNode?.data.grad_clip || 1.0,
+        log_every: 10,
+        save_every: 500,
         eval_every: hyperparamsNode?.data.eval_every || 500,
-        eval_steps: hyperparamsNode?.data.eval_steps || 100,
-        // AdamW-specific
+        eval_steps: hyperparamsNode?.data.eval_steps || 50,
+        save_best_only: true,
+        output_dir: 'sft_checkpoints',
+        // LoRA configuration (optional - enabled if node exists)
+        use_lora: loraNode ? true : false,
+        lora_preset: loraNode?.data.preset || 'minimal',
+        lora_target_modules: loraNode?.data.lora_target_modules,
+        lora_r: loraNode?.data.lora_r || 8,
+        lora_alpha: loraNode?.data.lora_alpha || 16,
+        lora_dropout: loraNode?.data.lora_dropout || 0.05,
+        // Optimizer-specific parameters
         adamw_beta1: optimizerNode.data.beta1 || 0.9,
         adamw_beta2: optimizerNode.data.beta2 || 0.999,
         adamw_eps: optimizerNode.data.eps || 1e-8,
-        // Muon-specific
         muon_momentum: optimizerNode.data.momentum || 0.95,
         muon_nesterov: optimizerNode.data.nesterov ?? true,
-        // Lion-specific
         lion_beta1: optimizerNode.data.beta1 || 0.9,
         lion_beta2: optimizerNode.data.beta2 || 0.99,
-        // Sophia-specific
         sophia_beta1: optimizerNode.data.beta1 || 0.965,
         sophia_beta2: optimizerNode.data.beta2 || 0.99,
         sophia_rho: optimizerNode.data.rho || 0.04,
-      };
-
-      // Build model config from Model Architecture nodes
-      const tokenizerNode = modelNodes.find(n => n.type === 'tokenizer');
-      const embeddingNode = modelNodes.find(n => n.type === 'embedding');
-      const posEncodingNode = modelNodes.find(n => ['rope', 'alibi', 'yarn', 'sinusoidal'].includes(n.type || ''));
-      const attentionNode = modelNodes.find(n => ['mha', 'gqa', 'mqa', 'mla'].includes(n.type || ''));
-      const normNode = modelNodes.find(n => ['rmsnorm', 'layernorm'].includes(n.type || ''));
-      const ffnNode = modelNodes.find(n => ['swiglu', 'gelu', 'relu'].includes(n.type || ''));
-      const lmheadNode = modelNodes.find(n => n.type === 'lmhead');
-
-      // Find loop edge for n_layers
-      const loopEdge = modelEdges.find(e => e.data?.isLoop);
-
-      const modelConfig: ModelConfigData = {
-        model_architecture: 'transformer',
-        tokenizer_name: tokenizerNode?.data.tokenizer_name || 'Qwen/Qwen2.5-0.5B',
-        d_model: embeddingNode?.data.d_model || 896,
-        n_layers: loopEdge?.data?.repeatCount || 24,
-        vocab_size: embeddingNode?.data.vocab_size || 151936,
-        max_seq_len: posEncodingNode?.data.max_seq_len || 1024,
-        positional_encoding: posEncodingNode?.type || 'rope',
-        attention_type: attentionNode?.type || 'gqa',
-        activation: ffnNode?.type || 'swiglu',
-        n_heads: attentionNode?.data.n_heads || 14,
-        n_kv_heads: attentionNode?.data.n_kv_heads || 2,
-        d_ff: ffnNode?.data.d_ff || 3584,
-        norm_type: normNode?.type || 'rmsnorm',
-        norm_eps: 1e-6,
-        dropout: 0.0,
-        tie_word_embeddings: lmheadNode?.data.tie_weights ?? true,
-        model_type: 'custom_transformer',
-        // MLA-specific parameters (only if MLA attention is used)
-        d_latent: attentionNode?.data.d_latent || undefined,
-        d_rope_latent: attentionNode?.data.d_rope_latent || undefined,
       };
 
       // Reset training state
@@ -265,20 +239,20 @@ const TrainingCanvas = ({
         isPaused: false,
         progress: 0,
         currentStep: 0,
-        maxSteps: trainingConfig.max_steps,
+        maxSteps: sftConfig.max_steps,
         currentLoss: null,
         currentPPL: null,
         currentLR: null,
       });
 
-      // Start training via API
-      await startTraining(modelConfig, trainingConfig);
+      // Start SFT via API
+      await startSFT(sftConfig);
 
       // Navigate to monitor
       onStartTraining();
     } catch (error: any) {
-      console.error('Failed to start training:', error);
-      alert(`Failed to start training: ${error.message}`);
+      console.error('Failed to start SFT:', error);
+      alert(`Failed to start SFT: ${error.message}`);
       updateTrainingState({
         isTraining: false,
         isPaused: false,
@@ -309,30 +283,32 @@ const TrainingCanvas = ({
           className="bg-slate-800 border border-slate-700"
           nodeColor={(node) => {
             switch (node.type) {
+              case 'basemodel':
+                return '#3b82f6'; // blue
               case 'dataset':
-                return '#3b82f6';
-              case 'model':
-                return '#6366f1';
+                return '#06b6d4'; // cyan
               case 'adamw':
-                return '#ef4444';
+                return '#ef4444'; // red
               case 'muon':
-                return '#f97316';
+                return '#f97316'; // orange
               case 'lion':
-                return '#f59e0b';
+                return '#f59e0b'; // amber
               case 'sophia':
-                return '#f43f5e';
+                return '#f43f5e'; // rose
               case 'cosine':
-                return '#a855f7';
+                return '#a855f7'; // purple
               case 'linear':
-                return '#8b5cf6';
+                return '#8b5cf6'; // violet
               case 'polynomial':
-                return '#d946ef';
+                return '#d946ef'; // fuchsia
               case 'constant':
-                return '#64748b';
+                return '#64748b'; // slate
               case 'hyperparams':
-                return '#22c55e';
+                return '#22c55e'; // green
+              case 'lora':
+                return '#a855f7'; // purple
               default:
-                return '#64748b';
+                return '#64748b'; // slate
             }
           }}
         />
@@ -340,7 +316,7 @@ const TrainingCanvas = ({
 
       {/* Validation Panel */}
       <div className={`absolute top-4 right-4 space-y-4 transition-all duration-300 ${selectedNode ? 'mr-96' : ''}`}>
-        <ValidationPanel nodes={nodes} edges={edges} mode="training" />
+        <ValidationPanel nodes={nodes} edges={edges} mode="sft" />
       </div>
 
       {/* Configuration Panel */}
@@ -350,28 +326,28 @@ const TrainingCanvas = ({
         onUpdate={onConfigUpdate}
       />
 
-      {/* Start Training Button */}
+      {/* Start SFT Button */}
       <motion.div
         initial={{ scale: 0.9, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         className="absolute bottom-8 left-1/2 transform -translate-x-1/2"
       >
         <button
-          onClick={handleStartTraining}
-          className="px-8 py-4 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white rounded-xl font-bold text-lg flex items-center gap-3 shadow-2xl transition-all hover:scale-105 border-2 border-green-400"
+          onClick={handleStartSFT}
+          className="px-8 py-4 bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-700 hover:to-violet-700 text-white rounded-xl font-bold text-lg flex items-center gap-3 shadow-2xl transition-all hover:scale-105 border-2 border-purple-400"
         >
           <Play className="w-6 h-6" />
-          Start Training
+          Start SFT
         </button>
       </motion.div>
     </div>
   );
 };
 
-const TrainingCanvasWrapper = (props: TrainingCanvasProps) => (
+const SFTCanvasWrapper = (props: SFTCanvasProps) => (
   <ReactFlowProvider>
-    <TrainingCanvas {...props} />
+    <SFTCanvas {...props} />
   </ReactFlowProvider>
 );
 
-export default TrainingCanvasWrapper;
+export default SFTCanvasWrapper;

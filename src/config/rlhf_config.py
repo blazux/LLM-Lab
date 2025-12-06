@@ -11,7 +11,7 @@ class RLHFConfig:
     algorithm: str = "ppo"  # Options: "ppo", "dpo", or "grpo"
 
     # Policy Model
-    policy_checkpoint: str = "checkpoints/best_model.pt"
+    policy_checkpoint: str = "outputs/sft/best_model.pt"
 
     # Reward Model (only used for PPO)
     reward_model_name: str = "OpenAssistant/reward-model-deberta-v3-large-v2"
@@ -79,7 +79,7 @@ class RLHFConfig:
     eval_steps: int = 50
 
     # Output
-    output_dir: str = "rlhf_checkpoints"
+    output_dir: str = "outputs/rlhf"
 
     # LoRA Configuration (Parameter-Efficient Fine-Tuning)
     use_lora: bool = False

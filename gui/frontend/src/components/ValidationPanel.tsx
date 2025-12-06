@@ -4,7 +4,7 @@ import { CheckCircle2, AlertCircle, XCircle } from 'lucide-react';
 interface ValidationPanelProps {
   nodes: Node[];
   edges: Edge[];
-  mode: 'model' | 'training';
+  mode: 'model' | 'training' | 'sft' | 'rlhf';
 }
 
 interface ValidationItem {
@@ -130,7 +130,142 @@ const ValidationPanel = ({ nodes, edges, mode }: ValidationPanelProps) => {
     return validations;
   };
 
-  const validations = mode === 'model' ? validateModel() : validateTraining();
+  const validateSFT = (): ValidationItem[] => {
+    const validations: ValidationItem[] = [];
+
+    // Check for base model
+    const hasBaseModel = nodes.some(n => n.type === 'basemodel');
+    validations.push({
+      label: 'Base Model',
+      status: hasBaseModel ? 'complete' : 'missing',
+      message: hasBaseModel ? undefined : 'Add a Base Model node'
+    });
+
+    // Check for dataset
+    const hasDataset = nodes.some(n => n.type === 'dataset');
+    validations.push({
+      label: 'Dataset',
+      status: hasDataset ? 'complete' : 'missing',
+      message: hasDataset ? undefined : 'Add at least one Dataset node'
+    });
+
+    // Check for optimizer
+    const hasOptimizer = nodes.some(n => ['adamw', 'muon', 'lion', 'sophia'].includes(n.type || ''));
+    validations.push({
+      label: 'Optimizer',
+      status: hasOptimizer ? 'complete' : 'missing',
+      message: hasOptimizer ? undefined : 'Add AdamW, Muon, Lion, or Sophia'
+    });
+
+    // Check for scheduler (optional but recommended)
+    const hasScheduler = nodes.some(n => ['cosine', 'linear', 'polynomial', 'constant'].includes(n.type || ''));
+    validations.push({
+      label: 'LR Scheduler',
+      status: hasScheduler ? 'complete' : 'warning',
+      message: hasScheduler ? undefined : 'Recommended: Add a scheduler'
+    });
+
+    // Check for hyperparameters (optional)
+    const hasHyperparams = nodes.some(n => n.type === 'hyperparams');
+    validations.push({
+      label: 'Hyperparameters',
+      status: hasHyperparams ? 'complete' : 'warning',
+      message: hasHyperparams ? undefined : 'Optional: Configure training hyperparameters'
+    });
+
+    // Check for LoRA (optional)
+    const hasLoRA = nodes.some(n => n.type === 'lora');
+    validations.push({
+      label: 'LoRA',
+      status: hasLoRA ? 'complete' : 'warning',
+      message: hasLoRA ? 'Using LoRA' : 'Optional: Add LoRA for parameter-efficient fine-tuning'
+    });
+
+    return validations;
+  };
+
+  const validateRLHF = (): ValidationItem[] => {
+    const validations: ValidationItem[] = [];
+
+    // Check for policy model
+    const hasPolicyModel = nodes.some(n => n.type === 'basemodel');
+    validations.push({
+      label: 'Policy Model',
+      status: hasPolicyModel ? 'complete' : 'missing',
+      message: hasPolicyModel ? undefined : 'Add a Policy Model node'
+    });
+
+    // Check for exactly one algorithm node
+    const hasPPO = nodes.some(n => n.type === 'ppo_reward');
+    const hasDPO = nodes.some(n => n.type === 'dpo_reference');
+    const hasGRPO = nodes.some(n => n.type === 'grpo_reward');
+    const algorithmCount = [hasPPO, hasDPO, hasGRPO].filter(Boolean).length;
+
+    if (algorithmCount === 1) {
+      const algorithm = hasPPO ? 'PPO' : hasDPO ? 'DPO' : 'GRPO';
+      validations.push({
+        label: 'Algorithm',
+        status: 'complete',
+        message: `Using ${algorithm}`
+      });
+    } else if (algorithmCount === 0) {
+      validations.push({
+        label: 'Algorithm',
+        status: 'missing',
+        message: 'Add one algorithm node (PPO/DPO/GRPO)'
+      });
+    } else {
+      validations.push({
+        label: 'Algorithm',
+        status: 'warning',
+        message: `Multiple algorithms detected (${algorithmCount}) - use only one`
+      });
+    }
+
+    // Check for dataset
+    const hasDataset = nodes.some(n => n.type === 'dataset');
+    validations.push({
+      label: 'Dataset',
+      status: hasDataset ? 'complete' : 'missing',
+      message: hasDataset ? undefined : 'Add at least one Dataset node'
+    });
+
+    // Check for optimizer
+    const hasOptimizer = nodes.some(n => ['adamw', 'muon', 'lion', 'sophia'].includes(n.type || ''));
+    validations.push({
+      label: 'Optimizer',
+      status: hasOptimizer ? 'complete' : 'missing',
+      message: hasOptimizer ? undefined : 'Add AdamW, Muon, Lion, or Sophia'
+    });
+
+    // Check for scheduler (optional)
+    const hasScheduler = nodes.some(n => ['cosine', 'linear', 'polynomial', 'constant'].includes(n.type || ''));
+    validations.push({
+      label: 'LR Scheduler',
+      status: hasScheduler ? 'complete' : 'warning',
+      message: hasScheduler ? undefined : 'Recommended: Add a scheduler'
+    });
+
+    // Check for RLHF hyperparameters
+    const hasRLHFHyperparams = nodes.some(n => n.type === 'rlhf_hyperparams');
+    validations.push({
+      label: 'RLHF Hyperparameters',
+      status: hasRLHFHyperparams ? 'complete' : 'warning',
+      message: hasRLHFHyperparams ? undefined : 'Optional: Configure RLHF hyperparameters'
+    });
+
+    // Check for LoRA (optional)
+    const hasLoRA = nodes.some(n => n.type === 'lora');
+    validations.push({
+      label: 'LoRA',
+      status: hasLoRA ? 'complete' : 'warning',
+      message: hasLoRA ? 'Using LoRA' : 'Optional: Add LoRA for parameter-efficient fine-tuning'
+    });
+
+    return validations;
+  };
+
+  const validations = mode === 'model' ? validateModel() : mode === 'sft' ? validateSFT() : mode === 'rlhf' ? validateRLHF() : validateTraining();
   const completeCount = validations.filter(v => v.status === 'complete').length;
   const totalCount = validations.length;
   const percentage = Math.round((completeCount / totalCount) * 100);
