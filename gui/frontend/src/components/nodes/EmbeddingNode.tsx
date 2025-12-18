@@ -7,6 +7,7 @@ interface EmbeddingNodeProps {
     label: string;
     d_model?: number;
     vocab_size?: number;
+    max_seq_len?: number;
   };
 }
 
@@ -34,6 +35,11 @@ export default memo(({ data }: EmbeddingNodeProps) => {
           {data.vocab_size && (
             <div className="text-teal-200 text-xs">
               vocab: {data.vocab_size}
+            </div>
+          )}
+          {data.max_seq_len && (
+            <div className="text-teal-200 text-xs">
+              max_len: {data.max_seq_len}
             </div>
           )}
         </div>

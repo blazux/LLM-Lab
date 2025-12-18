@@ -142,6 +142,39 @@ const MODEL_BLOCKS = [
       },
     ]
   },
+  {
+    category: 'State Space Model (Mamba2)',
+    blocks: [
+      {
+        id: 'ssmcore',
+        label: 'SSM Core',
+        emoji: '🌊',
+        color: 'from-cyan-500 to-cyan-700',
+        description: 'State space model'
+      },
+      {
+        id: 'temporalconv',
+        label: 'Temporal Conv',
+        emoji: '⏱️',
+        color: 'from-teal-500 to-teal-700',
+        description: 'Causal convolution'
+      },
+      {
+        id: 'gating',
+        label: 'Gating',
+        emoji: '🚪',
+        color: 'from-sky-500 to-sky-700',
+        description: 'Channel expansion'
+      },
+      {
+        id: 'headprojection',
+        label: 'Head Projection',
+        emoji: '🧠',
+        color: 'from-indigo-500 to-indigo-700',
+        description: 'Multi-head structure'
+      },
+    ]
+  },
 ];
 
 const TRAINING_BLOCKS = [
@@ -493,10 +526,13 @@ interface SidebarProps {
   activeTab: 'model' | 'training' | 'sft' | 'rlhf' | 'monitor' | 'inference';
   onLoadPreset?: (nodes: Node[], edges: any[]) => void;
   onClearCanvas?: () => void;
+  architectureFilter?: 'transformer' | 'mamba2';
+  onArchitectureFilterChange?: (filter: 'transformer' | 'mamba2') => void;
 }
 
-const Sidebar = ({ nodes, onGenerateConfig, activeTab, onLoadPreset, onClearCanvas }: SidebarProps) => {
+const Sidebar = ({ nodes, onGenerateConfig, activeTab, onLoadPreset, onClearCanvas, architectureFilter = 'transformer', onArchitectureFilterChange }: SidebarProps) => {
   const [showPresetModal, setShowPresetModal] = useState(false);
+
   // Check which normalization type is currently used on the canvas
   const hasRMSNorm = nodes.some(node => node.type === 'rmsnorm');
   const hasLayerNorm = nodes.some(node => node.type === 'layernorm');
@@ -507,6 +543,25 @@ const Sidebar = ({ nodes, onGenerateConfig, activeTab, onLoadPreset, onClearCanv
     if (blockId === 'layernorm' && hasRMSNorm) return true;
     return false;
   };
+
+  // Filter sections based on selected architecture
+  const getFilteredSections = () => {
+    if (architectureFilter === 'mamba2') {
+      // For Mamba2: show Core, State Space Model, and Normalization only
+      return MODEL_BLOCKS.filter(section =>
+        section.category === 'Core Components' ||
+        section.category === 'State Space Model (Mamba2)' ||
+        section.category === 'Normalization'
+      );
+    } else {
+      // For Transformer: show everything except State Space Model
+      return MODEL_BLOCKS.filter(section =>
+        section.category !== 'State Space Model (Mamba2)' &&
+        section.category !== 'Architecture'
+      );
+    }
+  };
+
   const onDragStart = (event: React.DragEvent, nodeType: string, label: string) => {
     event.dataTransfer.setData('application/reactflow', nodeType);
     event.dataTransfer.setData('label', label);
@@ -531,9 +586,32 @@ const Sidebar = ({ nodes, onGenerateConfig, activeTab, onLoadPreset, onClearCanv
         <p className="text-slate-400 text-sm">{description}</p>
       </div>
 
+      {/* Architecture selector for model tab */}
+      {activeTab === 'model' && (
+        <div className="mb-6 p-4 bg-slate-900 rounded-lg border border-slate-700">
+          <label className="text-white text-sm font-semibold mb-2 block">
+            Architecture
+          </label>
+          <select
+            value={architectureFilter}
+            onChange={(e) => onArchitectureFilterChange?.(e.target.value as 'transformer' | 'mamba2')}
+            className="w-full px-3 py-2 rounded-md text-sm bg-slate-800 text-white border border-slate-600 focus:outline-none focus:ring-2 focus:ring-purple-500"
+          >
+            <option value="transformer">🏛️ Transformer (Attention-based)</option>
+            <option value="mamba2">🌊 Mamba2 (State Space Model)</option>
+          </select>
+          <p className="text-xs text-slate-400 mt-2">
+            {architectureFilter === 'transformer'
+              ? 'O(N²) complexity - Uses attention mechanisms'
+              : 'O(N) complexity - Uses state space models'
+            }
+          </p>
+        </div>
+      )}
+
       {activeTab === 'model' || activeTab === 'training' || activeTab === 'sft' || activeTab === 'rlhf' ? (
         <div className="space-y-6">
-          {(activeTab === 'model' ? MODEL_BLOCKS : activeTab === 'sft' ? SFT_BLOCKS : activeTab === 'rlhf' ? RLHF_BLOCKS : TRAINING_BLOCKS).map((section, sectionIndex) => (
+          {(activeTab === 'model' ? getFilteredSections() : activeTab === 'sft' ? SFT_BLOCKS : activeTab === 'rlhf' ? RLHF_BLOCKS : TRAINING_BLOCKS).map((section, sectionIndex) => (
             <div key={section.category}>
               <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
                 {section.category}

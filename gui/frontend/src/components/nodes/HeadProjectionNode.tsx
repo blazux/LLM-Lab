@@ -2,13 +2,18 @@ import { memo } from 'react';
 import { Handle, Position } from 'reactflow';
 import { motion } from 'framer-motion';
 
-interface YARNNodeProps {
+interface HeadProjectionNodeProps {
   data: {
     label: string;
+    headdim?: number;
+    ngroups?: number;
   };
 }
 
-export default memo(({ data: _data }: YARNNodeProps) => {
+export default memo(({ data }: HeadProjectionNodeProps) => {
+  const headdim = data.headdim || 64;
+  const ngroups = data.ngroups || 1;
+
   return (
     <motion.div
       initial={{ scale: 0.8, opacity: 0 }}
@@ -23,11 +28,11 @@ export default memo(({ data: _data }: YARNNodeProps) => {
         style={{ width: 12, height: 12 }}
       />
       <div className="flex items-center gap-3">
-        <div className="text-3xl">🧶</div>
+        <div className="text-3xl">🧠</div>
         <div>
-          <div className="text-white font-bold text-sm">YARN</div>
+          <div className="text-white font-bold text-sm">Head Projection</div>
           <div className="text-indigo-200 text-xs mt-1">
-            RoPE Extension
+            Dim: {headdim}, Groups: {ngroups}
           </div>
         </div>
       </div>

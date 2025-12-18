@@ -48,6 +48,11 @@ import LayerNormNode from './nodes/LayerNormNode';
 import SwiGLUNode from './nodes/SwiGLUNode';
 import GELUNode from './nodes/GELUNode';
 import ReLUNode from './nodes/ReLUNode';
+// Mamba2 nodes
+import SSMCoreNode from './nodes/SSMCoreNode';
+import TemporalConvNode from './nodes/TemporalConvNode';
+import GatingNode from './nodes/GatingNode';
+import HeadProjectionNode from './nodes/HeadProjectionNode';
 import { generateConfigFromNodes, downloadConfig } from '../utils/configGenerator';
 
 const nodeTypes = {
@@ -73,6 +78,11 @@ const nodeTypes = {
   swiglu: SwiGLUNode,
   gelu: GELUNode,
   relu: ReLUNode,
+  // Mamba2 components
+  ssmcore: SSMCoreNode,
+  temporalconv: TemporalConvNode,
+  gating: GatingNode,
+  headprojection: HeadProjectionNode,
 };
 
 const edgeTypes = {
@@ -91,6 +101,7 @@ const initialNodes: Node[] = [
 const Canvas = () => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<'model' | 'training' | 'sft' | 'rlhf' | 'monitor' | 'inference'>('model');
+  const [architectureFilter, setArchitectureFilter] = useState<'transformer' | 'mamba2'>('transformer');
 
   // Model Architecture state
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
@@ -182,8 +193,6 @@ const Canvas = () => {
   // Calculate model parameters (matches src/config/config.py count_params())
   const calculateParameters = useCallback(() => {
     const embeddingNode = nodes.find(n => n.type === 'embedding');
-    const attentionNode = nodes.find(n => ['mha', 'gqa', 'mqa', 'mla'].includes(n.type || ''));
-    const ffnNode = nodes.find(n => ['swiglu', 'gelu', 'relu'].includes(n.type || ''));
     const loopEdge = edges.find(e => e.data?.isLoop);
 
     if (!embeddingNode) return null;
@@ -191,53 +200,101 @@ const Canvas = () => {
     const d_model = embeddingNode.data.d_model || 896;
     const vocab_size = embeddingNode.data.vocab_size || 151936;
     const n_layers = loopEdge?.data?.repeatCount || 24;
-    const d_ff = ffnNode?.data.d_ff || (d_model * 4);
-    const attention_type = attentionNode?.type || 'gqa';
 
-    // Embeddings
+    // Embeddings (common to both architectures)
     const embed_params = vocab_size * d_model;
 
-    // Calculate d_k (head dimension)
-    const n_heads = attentionNode?.data.n_heads || 14;
-    const d_k = d_model / n_heads;
+    // Detect architecture from nodes
+    const hasMamba2Nodes = nodes.some(n =>
+      n.type === 'ssmcore' || n.type === 'temporalconv' ||
+      n.type === 'gating' || n.type === 'headprojection'
+    );
+    const hasTransformerNodes = nodes.some(n =>
+      ['mha', 'gqa', 'mqa', 'mla', 'rope', 'alibi', 'yarn', 'sinusoidal'].includes(n.type || '')
+    );
 
-    // Per-layer attention (exact formulas from Python)
-    let attn_params: number;
-    if (attention_type === 'mha') {
-      // Q, K, V, O projections: all are d_model x d_model
-      attn_params = 4 * d_model * d_model;
-    } else if (attention_type === 'mqa') {
-      // Q projection: d_model x d_model
-      // Single K,V: 2 * d_model * d_k
-      // O projection: d_model x d_model
-      attn_params = d_model * d_model + 2 * d_model * d_k + d_model * d_model;
-    } else if (attention_type === 'mla') {
-      // MLA uses latent dimensions
-      const d_latent = attentionNode?.data.d_latent || Math.max(d_model / 4, d_k);
-      const q_params = d_model * d_model;
-      const kv_down_params = d_model * d_latent;
-      const k_up_params = d_latent * d_model;
-      const v_up_params = d_latent * d_model;
-      const out_params = d_model * d_model;
-      attn_params = q_params + kv_down_params + k_up_params + v_up_params + out_params;
-    } else { // gqa
-      // Q projection: d_model x d_model
-      // K,V projections: 2 * n_kv_heads * d_k * d_model
-      // O projection: d_model x d_model
-      const n_kv_heads = attentionNode?.data.n_kv_heads || 2;
-      attn_params = d_model * d_model + 2 * n_kv_heads * d_k * d_model + d_model * d_model;
+    const isMamba2 = hasMamba2Nodes && !hasTransformerNodes;
+
+    let layer_params: number;
+
+    if (isMamba2) {
+      // Mamba2 parameter calculation (matches src/config/config.py)
+      const ssmNode = nodes.find(n => n.type === 'ssmcore');
+      const gatingNode = nodes.find(n => n.type === 'gating');
+
+      const state_size = ssmNode?.data.state_size || 64;
+      const expand_factor = gatingNode?.data.expand_factor || 2;
+      const d_inner = Math.floor(d_model * expand_factor);
+
+      // Auto-compute dt_rank (same as config.py)
+      const dt_rank = Math.ceil(d_model / 16);
+
+      // Input projection (d_model -> 2 * d_inner for x and z)
+      const input_proj_params = d_model * (2 * d_inner);
+
+      // SSM parameters (A, B, C, D, dt)
+      const ssm_params = (
+        d_inner * state_size +  // A
+        d_inner * state_size +  // B
+        d_inner * state_size +  // C
+        d_inner +  // D
+        d_inner * dt_rank + dt_rank  // dt projection
+      );
+
+      // Convolution kernel
+      const convNode = nodes.find(n => n.type === 'temporalconv');
+      const conv_kernel_size = convNode?.data.conv_kernel_size || 4;
+      const conv_params = d_inner * conv_kernel_size;
+
+      // Output projection (d_inner -> d_model)
+      const output_proj_params = d_inner * d_model;
+
+      // Normalization (1 per layer for pre-norm)
+      const norm_params = 2 * d_model;
+
+      layer_params = input_proj_params + ssm_params + conv_params + output_proj_params + norm_params;
+    } else {
+      // Transformer parameter calculation
+      const attentionNode = nodes.find(n => ['mha', 'gqa', 'mqa', 'mla'].includes(n.type || ''));
+      const ffnNode = nodes.find(n => ['swiglu', 'gelu', 'relu'].includes(n.type || ''));
+      const d_ff = ffnNode?.data.d_ff || (d_model * 4);
+      const attention_type = attentionNode?.type || 'gqa';
+
+      // Calculate d_k (head dimension)
+      const n_heads = attentionNode?.data.n_heads || 14;
+      const d_k = d_model / n_heads;
+
+      // Per-layer attention (exact formulas from Python)
+      let attn_params: number;
+      if (attention_type === 'mha') {
+        attn_params = 4 * d_model * d_model;
+      } else if (attention_type === 'mqa') {
+        attn_params = d_model * d_model + 2 * d_model * d_k + d_model * d_model;
+      } else if (attention_type === 'mla') {
+        const d_latent = attentionNode?.data.d_latent || Math.max(d_model / 4, d_k);
+        const q_params = d_model * d_model;
+        const kv_down_params = d_model * d_latent;
+        const k_up_params = d_latent * d_model;
+        const v_up_params = d_latent * d_model;
+        const out_params = d_model * d_model;
+        attn_params = q_params + kv_down_params + k_up_params + v_up_params + out_params;
+      } else { // gqa
+        const n_kv_heads = attentionNode?.data.n_kv_heads || 2;
+        attn_params = d_model * d_model + 2 * n_kv_heads * d_k * d_model + d_model * d_model;
+      }
+
+      // Per-layer FFN
+      const activation = ffnNode?.type || 'swiglu';
+      const ff_params = activation === 'swiglu'
+        ? 3 * d_model * d_ff
+        : 2 * d_model * d_ff;
+
+      // Per-layer normalization (2 per layer: pre-attn and pre-ffn)
+      const norm_params = 4 * d_model;
+
+      layer_params = attn_params + ff_params + norm_params;
     }
 
-    // Per-layer FFN
-    const activation = ffnNode?.type || 'swiglu';
-    const ff_params = activation === 'swiglu'
-      ? 3 * d_model * d_ff  // SwiGLU has 3 projections
-      : 2 * d_model * d_ff; // Others have 2 projections
-
-    // Per-layer normalization (2 per layer: pre-attn and pre-ffn)
-    const norm_params = 4 * d_model;
-
-    const layer_params = attn_params + ff_params + norm_params;
     const total_params = embed_params + (n_layers * layer_params) + d_model; // +d_model for final norm
 
     return total_params;
@@ -428,6 +485,8 @@ const Canvas = () => {
         activeTab={activeTab}
         onLoadPreset={getPresetHandler()}
         onClearCanvas={getClearCanvasHandler()}
+        architectureFilter={architectureFilter}
+        onArchitectureFilterChange={setArchitectureFilter}
       />
       <div className="flex-1 relative flex flex-col" ref={reactFlowWrapper}>
         {/* Tab Switcher */}
@@ -581,7 +640,7 @@ const Canvas = () => {
                     </div>
                   </div>
                 </div>
-                <ValidationPanel nodes={nodes} edges={edges} mode="model" />
+                <ValidationPanel nodes={nodes} edges={edges} mode="model" architectureFilter={architectureFilter} />
               </div>
 
               {/* Configuration Panel */}

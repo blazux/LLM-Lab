@@ -247,6 +247,26 @@ def configure_model():
         else:
             config.dt_rank = int(dt_rank_input)
 
+        print(f"\n  {Colors.DIM}Multi-head configuration (affects memory and parallelism){Colors.RESET}")
+        config.headdim = get_input(
+            "Head dimension (32, 64, or 128)",
+            default=config.headdim,
+            type_fn=int
+        )
+
+        config.ngroups = get_input(
+            "Number of groups (1=no grouping, 8=grouped for efficiency)",
+            default=config.ngroups,
+            type_fn=int
+        )
+
+        print(f"\n  {Colors.DIM}Chunk size for processing (affects memory usage){Colors.RESET}")
+        config.chunk_size = get_input(
+            "Chunk size (128, 256, or 512)",
+            default=config.chunk_size,
+            type_fn=int
+        )
+
     # Save config
     print_subsection("Save Configuration", "💾")
 

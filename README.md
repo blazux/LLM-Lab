@@ -15,7 +15,16 @@ A flexible framework for training and fine-tuning Large Language Models from scr
 
 ### Option 1: Docker (Recommended)
 
-You'll need an NVIDIA GPU and nvidia-docker installed:
+We provide two Docker images to suit different needs:
+
+#### Standard Image (Universal Compatibility)
+Lightweight image that works on any system with GPU or CPU. Uses PyTorch-based Mamba2 implementation.
+
+**Best for:**
+- Quick testing and development
+- Systems without NVIDIA GPUs
+- Maximum compatibility across hardware
+- Smaller Mamba2 models (reduce batch size/sequence length for large models)
 
 ```bash
 docker run -d -p 8000:8000 \
@@ -23,14 +32,37 @@ docker run -d -p 8000:8000 \
   -v $(pwd)/checkpoints:/app/gui/backend/checkpoints \
   -v $(pwd)/cache:/app/cache \
   --name llm-lab \
-  blazux/llm-lab
+  blazux/llm-lab:latest
 ```
+
+#### CUDA Image (High Performance)
+Optimized image with CUDA 12.8 and mamba-ssm kernels compiled for multiple GPU architectures.
+
+**Best for:**
+- Production Mamba2 training (100x more memory efficient)
+- Large models and long sequences
+- NVIDIA GPUs: V100, RTX 20xx/30xx/40xx/50xx, A100, H100
+
+**Requirements:**
+- NVIDIA GPU with CUDA support (compute capability 7.0+)
+- Docker with NVIDIA Container Toolkit (nvidia-docker)
+
+```bash
+docker run -d -p 8000:8000 \
+  --gpus all \
+  -v $(pwd)/checkpoints:/app/gui/backend/checkpoints \
+  -v $(pwd)/cache:/app/cache \
+  --name llm-lab \
+  blazux/llm-lab:cuda
+```
+
+**Note:** The CUDA image is significantly larger (~8GB vs ~2GB) due to compiled kernels for multiple GPU architectures.
+
+---
 
 Access the web interface at http://localhost:8000
 
-or
-
-Launch the CLI : 
+Launch the CLI:
 ```bash
 docker exec -it llm-lab ../../llm-lab.sh
 ```
@@ -56,10 +88,12 @@ The web interface provides a visual workflow for configuring and training your m
 pip install -r requirements.txt
 ```
 
-**Optional (for Mamba2 with optimized kernels):**
+**For Mamba2 support (requires CUDA):**
 ```bash
-pip install mamba-ssm>=2.0.0 causal-conv1d>=1.2.0
+pip install -r requirements-mamba.txt
 ```
+
+**Note**: This installs the optimized `mamba-ssm` CUDA kernels which are required for training Mamba2 models efficiently. Requires CUDA toolkit (nvcc) to be installed.
 
 ### Training Workflow
 

@@ -1,0 +1,5 @@
+# Optional dependencies for Mamba2 with optimized CUDA kernels
+# Requires CUDA development tools (nvcc) to build
+# If not installed, Mamba2 will use the built-in PyTorch implementation
+mamba-ssm>=2.0.0
+causal-conv1d>=1.2.0

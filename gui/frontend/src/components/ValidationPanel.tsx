@@ -5,6 +5,7 @@ interface ValidationPanelProps {
   nodes: Node[];
   edges: Edge[];
   mode: 'model' | 'training' | 'sft' | 'rlhf';
+  architectureFilter?: 'transformer' | 'mamba2';
 }
 
 interface ValidationItem {
@@ -13,9 +14,26 @@ interface ValidationItem {
   message?: string;
 }
 
-const ValidationPanel = ({ nodes, edges, mode }: ValidationPanelProps) => {
+const ValidationPanel = ({ nodes, edges, mode, architectureFilter }: ValidationPanelProps) => {
   const validateModel = (): ValidationItem[] => {
     const validations: ValidationItem[] = [];
+
+    // Detect architecture from nodes if they exist, otherwise use filter
+    const hasMamba2Nodes = nodes.some(n =>
+      n.type === 'ssmcore' || n.type === 'temporalconv' ||
+      n.type === 'gating' || n.type === 'headprojection'
+    );
+    const hasTransformerNodes = nodes.some(n =>
+      ['mha', 'gqa', 'mqa', 'mla', 'rope', 'alibi', 'yarn', 'sinusoidal'].includes(n.type || '')
+    );
+
+    // Use nodes to detect architecture if they exist, otherwise use the filter
+    let isMamba2: boolean;
+    if (hasMamba2Nodes || hasTransformerNodes) {
+      isMamba2 = hasMamba2Nodes && !hasTransformerNodes;
+    } else {
+      isMamba2 = architectureFilter === 'mamba2';
+    }
 
     // Check for tokenizer
     const hasTokenizer = nodes.some(n => n.type === 'tokenizer');
@@ -33,23 +51,60 @@ const ValidationPanel = ({ nodes, edges, mode }: ValidationPanelProps) => {
       message: hasEmbedding ? undefined : 'Add an Embedding node'
     });
 
-    // Check for positional encoding
-    const hasPosEncoding = nodes.some(n => ['rope', 'alibi', 'yarn', 'sinusoidal'].includes(n.type || ''));
-    validations.push({
-      label: 'Positional Encoding',
-      status: hasPosEncoding ? 'complete' : 'warning',
-      message: hasPosEncoding ? undefined : 'Add RoPE, ALiBi, YARN, or Sinusoidal'
-    });
+    if (isMamba2) {
+      // Mamba2-specific validations
+      const hasSSMCore = nodes.some(n => n.type === 'ssmcore');
+      validations.push({
+        label: 'SSM Core',
+        status: hasSSMCore ? 'complete' : 'missing',
+        message: hasSSMCore ? undefined : 'Add SSM Core node'
+      });
 
-    // Check for attention
-    const hasAttention = nodes.some(n => ['mha', 'gqa', 'mqa', 'mla'].includes(n.type || ''));
-    validations.push({
-      label: 'Attention',
-      status: hasAttention ? 'complete' : 'missing',
-      message: hasAttention ? undefined : 'Add MHA, GQA, MQA, or MLA'
-    });
+      const hasTemporalConv = nodes.some(n => n.type === 'temporalconv');
+      validations.push({
+        label: 'Temporal Convolution',
+        status: hasTemporalConv ? 'complete' : 'missing',
+        message: hasTemporalConv ? undefined : 'Add Temporal Conv node'
+      });
 
-    // Check for normalization
+      const hasGating = nodes.some(n => n.type === 'gating');
+      validations.push({
+        label: 'Gating',
+        status: hasGating ? 'complete' : 'missing',
+        message: hasGating ? undefined : 'Add Gating node'
+      });
+
+      const hasHeadProjection = nodes.some(n => n.type === 'headprojection');
+      validations.push({
+        label: 'Head Projection',
+        status: hasHeadProjection ? 'complete' : 'missing',
+        message: hasHeadProjection ? undefined : 'Add Head Projection node'
+      });
+    } else {
+      // Transformer-specific validations
+      const hasPosEncoding = nodes.some(n => ['rope', 'alibi', 'yarn', 'sinusoidal'].includes(n.type || ''));
+      validations.push({
+        label: 'Positional Encoding',
+        status: hasPosEncoding ? 'complete' : 'warning',
+        message: hasPosEncoding ? undefined : 'Add RoPE, ALiBi, YARN, or Sinusoidal'
+      });
+
+      const hasAttention = nodes.some(n => ['mha', 'gqa', 'mqa', 'mla'].includes(n.type || ''));
+      validations.push({
+        label: 'Attention',
+        status: hasAttention ? 'complete' : 'missing',
+        message: hasAttention ? undefined : 'Add MHA, GQA, MQA, or MLA'
+      });
+
+      const hasFFN = nodes.some(n => ['swiglu', 'gelu', 'relu'].includes(n.type || ''));
+      validations.push({
+        label: 'Feed-Forward',
+        status: hasFFN ? 'complete' : 'missing',
+        message: hasFFN ? undefined : 'Add SwiGLU, GELU, or ReLU'
+      });
+    }
+
+    // Common validations (both architectures)
     const hasNorm = nodes.some(n => ['rmsnorm', 'layernorm'].includes(n.type || ''));
     validations.push({
       label: 'Normalization',
@@ -57,20 +112,15 @@ const ValidationPanel = ({ nodes, edges, mode }: ValidationPanelProps) => {
       message: hasNorm ? undefined : 'Add RMSNorm or LayerNorm'
     });
 
-    // Check for FFN
-    const hasFFN = nodes.some(n => ['swiglu', 'gelu', 'relu'].includes(n.type || ''));
-    validations.push({
-      label: 'Feed-Forward',
-      status: hasFFN ? 'complete' : 'missing',
-      message: hasFFN ? undefined : 'Add SwiGLU, GELU, or ReLU'
-    });
-
     // Check for loop edge
     const hasLoop = edges.some(e => e.data?.isLoop);
+    const loopMessage = isMamba2
+      ? 'Connect Norm back to Temporal Conv for n_layers'
+      : 'Connect second Norm back to Attention for n_layers';
     validations.push({
       label: 'Layer Loop',
       status: hasLoop ? 'complete' : 'warning',
-      message: hasLoop ? `${edges.find(e => e.data?.isLoop)?.data?.repeatCount || 0} layers` : 'Connect second Norm back to Attention for n_layers'
+      message: hasLoop ? `${edges.find(e => e.data?.isLoop)?.data?.repeatCount || 0} layers` : loopMessage
     });
 
     // Check for LM Head

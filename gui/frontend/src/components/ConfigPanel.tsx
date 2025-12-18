@@ -73,6 +73,20 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 Number of tokens in the vocabulary
               </p>
             </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Sequence Length
+              </label>
+              <input
+                type="number"
+                value={node.data.max_seq_len || 1024}
+                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum sequence length for training
+              </p>
+            </div>
           </div>
         );
 
@@ -80,22 +94,11 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
       case 'rope':
         return (
           <div className="space-y-4">
-            <div>
-              <label className="text-sm font-medium text-slate-300 mb-2 block">
-                Max Sequence Length
-              </label>
-              <input
-                type="number"
-                value={node.data.max_seq_len || 1024}
-                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <p className="text-xs text-slate-400 mt-1">
-                Maximum sequence length the model can process
-              </p>
-            </div>
             <div className="text-slate-300 text-sm">
               <p className="mb-2">RoPE (Rotary Position Embedding) is a modern positional encoding method that applies rotations to query and key vectors.</p>
+              <p className="text-xs text-slate-400 mt-2">
+                Note: Max sequence length is configured in the Embedding node.
+              </p>
             </div>
           </div>
         );
@@ -103,22 +106,11 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
       case 'alibi':
         return (
           <div className="space-y-4">
-            <div>
-              <label className="text-sm font-medium text-slate-300 mb-2 block">
-                Max Sequence Length
-              </label>
-              <input
-                type="number"
-                value={node.data.max_seq_len || 1024}
-                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
-              />
-              <p className="text-xs text-slate-400 mt-1">
-                Maximum sequence length the model can process
-              </p>
-            </div>
             <div className="text-slate-300 text-sm">
               <p className="mb-2">ALiBi (Attention with Linear Biases) adds position-dependent biases to attention scores.</p>
+              <p className="text-xs text-slate-400 mt-2">
+                Note: Max sequence length is configured in the Embedding node.
+              </p>
             </div>
           </div>
         );
@@ -126,22 +118,11 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
       case 'yarn':
         return (
           <div className="space-y-4">
-            <div>
-              <label className="text-sm font-medium text-slate-300 mb-2 block">
-                Max Sequence Length
-              </label>
-              <input
-                type="number"
-                value={node.data.max_seq_len || 1024}
-                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-              <p className="text-xs text-slate-400 mt-1">
-                Maximum sequence length the model can process
-              </p>
-            </div>
             <div className="text-slate-300 text-sm">
               <p className="mb-2">YARN (Yet Another RoPE extensioN) extends RoPE for longer context lengths.</p>
+              <p className="text-xs text-slate-400 mt-2">
+                Note: Max sequence length is configured in the Embedding node.
+              </p>
             </div>
           </div>
         );
@@ -149,22 +130,11 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
       case 'sinusoidal':
         return (
           <div className="space-y-4">
-            <div>
-              <label className="text-sm font-medium text-slate-300 mb-2 block">
-                Max Sequence Length
-              </label>
-              <input
-                type="number"
-                value={node.data.max_seq_len || 1024}
-                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
-              />
-              <p className="text-xs text-slate-400 mt-1">
-                Maximum sequence length the model can process
-              </p>
-            </div>
             <div className="text-slate-300 text-sm">
-              <p className="mb-2">Sinusoidal positional encoding from the original Transformer paper.</p>
+              <p className="mb-2">Sinusoidal Positional Encoding uses sine and cosine functions at different frequencies (original Transformer).</p>
+              <p className="text-xs text-slate-400 mt-2">
+                Note: Max sequence length is configured in the Embedding node.
+              </p>
             </div>
           </div>
         );
@@ -1500,6 +1470,134 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 onChange={(e) => handleChange('grpo_temperature', parseFloat(e.target.value))}
                 className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
               />
+            </div>
+          </div>
+        );
+
+      // Mamba2 nodes
+      case 'ssmcore':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                State Size (d_state)
+              </label>
+              <input
+                type="number"
+                value={node.data.state_size || 64}
+                onChange={(e) => handleChange('state_size', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                min="1"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Recurrent state memory dimension - larger = more memory capacity
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Common values: 16 (minimal), 32 (small), 64 (balanced), 128 (optimal)
+              </p>
+            </div>
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">SSM Core is the heart of the state space model, maintaining hidden state across the sequence.</p>
+            </div>
+          </div>
+        );
+
+      case 'temporalconv':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Convolution Kernel Size
+              </label>
+              <input
+                type="number"
+                value={node.data.conv_kernel_size || 4}
+                onChange={(e) => handleChange('conv_kernel_size', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                min="1"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Short-range pattern capture window size
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Common values: 3 (fast), 4 (balanced), 5 (better context), 7 (maximum context)
+              </p>
+            </div>
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">Temporal convolution captures local dependencies before the SSM processes long-range patterns.</p>
+            </div>
+          </div>
+        );
+
+      case 'gating':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Expansion Factor
+              </label>
+              <input
+                type="number"
+                value={node.data.expand_factor || 2}
+                onChange={(e) => handleChange('expand_factor', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                min="1"
+                step="0.5"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Channel expansion ratio for model expressiveness
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Common values: 1.5 (efficient), 2 (balanced), 2.5 (expressive), 3 (maximum)
+              </p>
+            </div>
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">Gating mechanism controls information flow, similar to GLU activation in transformers.</p>
+            </div>
+          </div>
+        );
+
+      case 'headprojection':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Head Dimension
+              </label>
+              <input
+                type="number"
+                value={node.data.headdim || 64}
+                onChange={(e) => handleChange('headdim', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                min="1"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Head dimension (like attention head size)
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Common values: 32 (fast), 64 (balanced), 128 (expressive)
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Number of Groups
+              </label>
+              <input
+                type="number"
+                value={node.data.ngroups || 1}
+                onChange={(e) => handleChange('ngroups', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                min="1"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Grouping for computational efficiency
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Common values: 1 (no grouping), 4 (grouped), 8 (efficient)
+              </p>
+            </div>
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">Multi-head structure similar to attention, allowing parallel processing of different features.</p>
             </div>
           </div>
         );

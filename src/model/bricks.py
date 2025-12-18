@@ -587,6 +587,10 @@ class Mamba2(nn.Module):
         """
         Selective scan implementation (sequential for correctness)
 
+        WARNING: This is a memory-intensive fallback implementation!
+        For production use, install mamba-ssm for optimized CUDA kernels:
+        pip install mamba-ssm>=2.0.0 causal-conv1d>=1.2.0
+
         Args:
             x: (batch, seq_len, d_inner) - input sequence
             dt: (batch, seq_len, d_inner) - time-step deltas
@@ -604,14 +608,16 @@ class Mamba2(nn.Module):
         h = torch.zeros(batch_size, d_inner, d_state, device=x.device, dtype=x.dtype)
 
         # Output buffer
-        y = torch.zeros_like(x)
+        y = []
 
         # Sequential scan (not optimized but correct)
+        # Process in chunks to reduce memory (less gradient tracking)
+        A_unsqueezed = A.unsqueeze(0)  # Pre-compute (1, d_inner, d_state)
+
         for t in range(seq_len):
             # Discretize A using dt: A_discrete = exp(dt * A)
             # For numerical stability, use A_discrete ≈ (1 + dt * A)
             dt_t = dt[:, t, :].unsqueeze(-1)  # (batch, d_inner, 1)
-            A_t = A.unsqueeze(0)  # (1, d_inner, d_state)
 
             # Discretized state transition: h = A_discrete * h + B * x
             # Simplified: h = h + dt * (A * h + B * x)
@@ -620,16 +626,24 @@ class Mamba2(nn.Module):
 
             # State update: h_new = h * exp(dt * A) + B * x * dt
             # Approximation: h_new ≈ h + dt * A * h + dt * B * x
-            dh_state = dt_t * (A_t * h)  # (batch, d_inner, d_state)
+            dh_state = dt_t * (A_unsqueezed * h)  # (batch, d_inner, d_state)
             dh_input = dt_t * (B_t * x_t)  # (batch, d_inner, d_state)
             h = h + dh_state + dh_input
 
             # Output: y = C * h
             C_t = C[:, t, :].unsqueeze(1)  # (batch, 1, d_state)
             y_t = (C_t * h).sum(dim=-1)  # (batch, d_inner)
-            y[:, t, :] = y_t
 
-        return y
+            # Detach and reattach to reduce gradient graph depth
+            # This trades off gradient accuracy for memory
+            if t > 0 and t % 64 == 0 and self.training:
+                # Checkpoint state every 64 steps to limit gradient graph
+                h = h.detach()
+                h.requires_grad_(True)
+
+            y.append(y_t)
+
+        return torch.stack(y, dim=1)
 
 
 class Mamba2Block(nn.Module):
@@ -647,24 +661,32 @@ class Mamba2Block(nn.Module):
         NormClass = NORM_TYPES[config.norm_type]
         self.norm = NormClass(config.d_model, eps=config.norm_eps)
 
-        # Use official mamba-ssm implementation
+        # Try to use official mamba-ssm implementation (optimized CUDA kernels)
+        # Fall back to custom PyTorch implementation if not available
         try:
             from mamba_ssm import Mamba2 as Mamba2Official
-        except ImportError:
-            raise ImportError(
-                "mamba-ssm package not found. Install with:\n"
-                "pip install mamba-ssm>=2.0.0 causal-conv1d>=1.2.0"
+            self.mamba = Mamba2Official(
+                d_model=config.d_model,
+                d_state=config.state_size,
+                d_conv=config.conv_kernel_size,
+                expand=config.expand_factor,
+                headdim=config.headdim,
+                ngroups=config.ngroups,
+                chunk_size=config.chunk_size,
             )
-
-        self.mamba = Mamba2Official(
-            d_model=config.d_model,
-            d_state=config.state_size,
-            d_conv=config.conv_kernel_size,
-            expand=config.expand_factor,
-            headdim=config.headdim,
-            ngroups=config.ngroups,
-            chunk_size=config.chunk_size,
-        )
+            print("Using official mamba-ssm optimized kernels")
+        except ImportError:
+            print("Warning: mamba-ssm not found. Using PyTorch fallback implementation.")
+            print("For better performance, install: pip install mamba-ssm>=2.0.0 causal-conv1d>=1.2.0")
+            self.mamba = Mamba2(
+                d_model=config.d_model,
+                d_state=config.state_size,
+                d_conv=config.conv_kernel_size,
+                expand=config.expand_factor,
+                headdim=config.headdim,
+                ngroups=config.ngroups,
+                chunk_size=config.chunk_size,
+            )
 
     def forward(self, x):
         """

@@ -1,3 +1,16 @@
+# ============================================================================
+# LLM-Lab Standard Image (Universal Compatibility)
+# ============================================================================
+# This Dockerfile builds a lightweight image that works on any system.
+# Uses PyTorch-based Mamba2 implementation (no mamba-ssm).
+#
+# Build command:
+#   docker build -f Dockerfile -t blazux/llm-lab:latest .
+#
+# Or use the build script:
+#   ./build-docker.sh
+# ============================================================================
+
 # Multi-stage build for efficiency
 FROM node:20-slim AS frontend-builder
 
@@ -16,7 +29,7 @@ COPY gui/frontend/ ./
 # Build frontend for production
 RUN npm run build
 
-# Main stage
+# Main stage - Lightweight image with universal compatibility
 FROM python:3.11-slim
 
 # Set working directory

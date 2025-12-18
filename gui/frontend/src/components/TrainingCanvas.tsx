@@ -31,6 +31,7 @@ import { Play } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useTraining } from '../context/TrainingContext';
 import { startTraining, ModelConfigData, TrainingConfigData } from '../services/trainingApi';
+import { generateConfigFromNodes } from '../utils/configGenerator';
 
 const nodeTypes = {
   model: ModelNode,
@@ -200,8 +201,8 @@ const TrainingCanvas = ({
         optimizer: optimizerNode.type || 'adamw',
         lr: optimizerNode.data.lr || hyperparamsNode?.data.lr || 0.001,
         weight_decay: optimizerNode.data.weight_decay || hyperparamsNode?.data.weight_decay || 0.01,
-        batch_size: hyperparamsNode?.data.batch_size || 4,
-        gradient_accumulation_steps: hyperparamsNode?.data.gradient_accumulation_steps || 1,
+        batch_size: hyperparamsNode?.data.batch_size || 1,
+        gradient_accumulation_steps: hyperparamsNode?.data.gradient_accumulation_steps || 4,
         max_steps: hyperparamsNode?.data.max_steps || 10000,
         warmup_steps: schedulerNode?.data.warmup_steps || 1000,
         scheduler: schedulerNode?.type || 'cosine',
@@ -224,40 +225,8 @@ const TrainingCanvas = ({
         sophia_rho: optimizerNode.data.rho || 0.04,
       };
 
-      // Build model config from Model Architecture nodes
-      const tokenizerNode = modelNodes.find(n => n.type === 'tokenizer');
-      const embeddingNode = modelNodes.find(n => n.type === 'embedding');
-      const posEncodingNode = modelNodes.find(n => ['rope', 'alibi', 'yarn', 'sinusoidal'].includes(n.type || ''));
-      const attentionNode = modelNodes.find(n => ['mha', 'gqa', 'mqa', 'mla'].includes(n.type || ''));
-      const normNode = modelNodes.find(n => ['rmsnorm', 'layernorm'].includes(n.type || ''));
-      const ffnNode = modelNodes.find(n => ['swiglu', 'gelu', 'relu'].includes(n.type || ''));
-      const lmheadNode = modelNodes.find(n => n.type === 'lmhead');
-
-      // Find loop edge for n_layers
-      const loopEdge = modelEdges.find(e => e.data?.isLoop);
-
-      const modelConfig: ModelConfigData = {
-        model_architecture: 'transformer',
-        tokenizer_name: tokenizerNode?.data.tokenizer_name || 'Qwen/Qwen2.5-0.5B',
-        d_model: embeddingNode?.data.d_model || 896,
-        n_layers: loopEdge?.data?.repeatCount || 24,
-        vocab_size: embeddingNode?.data.vocab_size || 151936,
-        max_seq_len: posEncodingNode?.data.max_seq_len || 1024,
-        positional_encoding: posEncodingNode?.type || 'rope',
-        attention_type: attentionNode?.type || 'gqa',
-        activation: ffnNode?.type || 'swiglu',
-        n_heads: attentionNode?.data.n_heads || 14,
-        n_kv_heads: attentionNode?.data.n_kv_heads || 2,
-        d_ff: ffnNode?.data.d_ff || 3584,
-        norm_type: normNode?.type || 'rmsnorm',
-        norm_eps: 1e-6,
-        dropout: 0.0,
-        tie_word_embeddings: lmheadNode?.data.tie_weights ?? true,
-        model_type: 'custom_transformer',
-        // MLA-specific parameters (only if MLA attention is used)
-        d_latent: attentionNode?.data.d_latent || undefined,
-        d_rope_latent: attentionNode?.data.d_rope_latent || undefined,
-      };
+      // Build model config from Model Architecture nodes using the proper config generator
+      const modelConfig = generateConfigFromNodes(modelNodes, modelEdges) as ModelConfigData;
 
       // Reset training state
       updateTrainingState({

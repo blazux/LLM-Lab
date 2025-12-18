@@ -10,12 +10,21 @@ interface ModelConfig {
   dropout: number;
   norm_type: string;
   norm_eps: number;
-  positional_encoding: string;
-  attention_type: string;
-  activation: string;
-  n_heads: number;
-  n_kv_heads: number;
-  d_ff: number;
+  // Transformer-specific
+  positional_encoding?: string;
+  attention_type?: string;
+  activation?: string;
+  n_heads?: number;
+  n_kv_heads?: number;
+  d_ff?: number;
+  // Mamba2-specific
+  state_size?: number;
+  expand_factor?: number;
+  conv_kernel_size?: number;
+  headdim?: number;
+  ngroups?: number;
+  chunk_size?: number;
+  // Common
   tie_word_embeddings: boolean;
   model_type: string;
 }
@@ -24,10 +33,31 @@ export const generateConfigFromNodes = (
   nodes: Node[],
   edges: Edge[]
 ): Partial<ModelConfig> => {
+  // Detect architecture from presence of Mamba2 or Transformer-specific nodes
+  const hasMamba2Nodes = nodes.some(node =>
+    node.type === 'ssmcore' ||
+    node.type === 'temporalconv' ||
+    node.type === 'gating' ||
+    node.type === 'headprojection'
+  );
+  const hasTransformerNodes = nodes.some(node =>
+    node.type === 'rope' ||
+    node.type === 'alibi' ||
+    node.type === 'yarn' ||
+    node.type === 'sinusoidal' ||
+    node.type === 'mha' ||
+    node.type === 'gqa' ||
+    node.type === 'mqa' ||
+    node.type === 'mla'
+  );
+
+  // Determine architecture: Mamba2 if it has Mamba2 nodes, otherwise Transformer
+  const isMamba2 = hasMamba2Nodes && !hasTransformerNodes;
+
   const config: Partial<ModelConfig> = {
-    model_architecture: 'transformer',
-    model_type: 'custom_transformer',
-    max_seq_len: 1024,
+    model_architecture: isMamba2 ? 'mamba2' : 'transformer',
+    model_type: isMamba2 ? 'custom_mamba2' : 'custom_transformer',
+    max_seq_len: 1024, // Default, can be overridden by embedding node
     dropout: 0.0,
     norm_eps: 1e-6,
   };
@@ -48,11 +78,16 @@ export const generateConfigFromNodes = (
       case 'embedding':
         config.d_model = node.data.d_model || 896;
         config.vocab_size = node.data.vocab_size || 151936;
+        // Allow configuring max_seq_len from embedding node
+        if (node.data.max_seq_len) {
+          config.max_seq_len = node.data.max_seq_len;
+        }
         break;
 
-      // Positional encoding nodes
+      // Positional encoding nodes (Transformer only)
       case 'rope':
         config.positional_encoding = 'rope';
+        // max_seq_len now configured from embedding node, not here
         break;
       case 'alibi':
         config.positional_encoding = 'alibi';
@@ -64,7 +99,7 @@ export const generateConfigFromNodes = (
         config.positional_encoding = 'sinusoidal';
         break;
 
-      // Attention nodes
+      // Attention nodes (Transformer only)
       case 'mha':
         config.attention_type = 'mha';
         config.n_heads = node.data.n_heads || 14;
@@ -85,7 +120,7 @@ export const generateConfigFromNodes = (
         config.n_heads = node.data.n_heads || 14;
         break;
 
-      // Normalization nodes
+      // Normalization nodes (both architectures)
       case 'rmsnorm':
         config.norm_type = 'rmsnorm';
         break;
@@ -93,7 +128,7 @@ export const generateConfigFromNodes = (
         config.norm_type = 'layernorm';
         break;
 
-      // FFN nodes
+      // FFN nodes (Transformer only)
       case 'swiglu':
         config.activation = 'swiglu';
         config.d_ff = node.data.d_ff || 3584;
@@ -107,11 +142,36 @@ export const generateConfigFromNodes = (
         config.d_ff = node.data.d_ff || 3584;
         break;
 
+      // Mamba2 nodes
+      case 'ssmcore':
+        config.state_size = node.data.state_size || 64;
+        break;
+      case 'temporalconv':
+        config.conv_kernel_size = node.data.conv_kernel_size || 4;
+        break;
+      case 'gating':
+        config.expand_factor = node.data.expand_factor || 2;
+        break;
+      case 'headprojection':
+        config.headdim = node.data.headdim || 64;
+        config.ngroups = node.data.ngroups || 1;
+        break;
+
       case 'lmhead':
         config.tie_word_embeddings = node.data.tie_weights ?? true;
         break;
     }
   });
+
+  // Set default Mamba2 parameters if architecture is mamba2 but nodes are missing
+  if (isMamba2) {
+    if (!config.state_size) config.state_size = 64;
+    if (!config.expand_factor) config.expand_factor = 2;
+    if (!config.conv_kernel_size) config.conv_kernel_size = 4;
+    if (!config.headdim) config.headdim = 64;
+    if (!config.ngroups) config.ngroups = 1;
+    config.chunk_size = 256; // Always set chunk_size for Mamba2
+  }
 
   return config;
 };

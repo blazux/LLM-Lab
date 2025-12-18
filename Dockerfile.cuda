@@ -1,0 +1,107 @@
+# ============================================================================
+# LLM-Lab CUDA Image (High Performance)
+# ============================================================================
+# This Dockerfile builds an optimized image with CUDA 12.8 and mamba-ssm
+# compiled for multiple GPU architectures (V100, RTX 20xx/30xx/40xx/50xx, A100, H100)
+#
+# Build command:
+#   docker build -f Dockerfile.cuda -t blazux/llm-lab:cuda .
+#
+# Or use the build script:
+#   ./build-docker.sh
+# ============================================================================
+
+# Multi-stage build for efficiency
+FROM node:20-slim AS frontend-builder
+
+# Set working directory for frontend
+WORKDIR /app/gui/frontend
+
+# Copy frontend package files
+COPY gui/frontend/package*.json ./
+
+# Install frontend dependencies
+RUN npm ci
+
+# Copy frontend source
+COPY gui/frontend/ ./
+
+# Build frontend for production
+RUN npm run build
+
+# Main stage - Use CUDA-enabled base image for mamba-ssm support
+# Using CUDA 12.6 for RTX 50xx series support (CUDA 13 not yet supported by PyTorch stable)
+FROM nvidia/cuda:12.6.3-devel-ubuntu22.04
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Set working directory
+WORKDIR /app
+
+# Install Python 3.11 and system dependencies
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3.11-distutils \
+    python3-pip \
+    git \
+    build-essential \
+    ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# Upgrade pip
+RUN python -m pip install --upgrade pip setuptools wheel
+
+# Copy Python requirements
+COPY requirements.txt ./
+COPY requirements-mamba.txt ./
+COPY gui/backend/requirements.txt ./gui/backend/
+
+# Install PyTorch 2.9+ with CUDA 12.8 support for RTX 50xx series (compute capability 12.0)
+RUN pip install --no-cache-dir --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+
+# Install other Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r gui/backend/requirements.txt
+
+# Install Mamba2 optimized CUDA kernels
+# Compile for multiple GPU architectures to ensure compatibility across different hardware
+# 7.0: V100, 7.5: Turing (RTX 20xx, T4), 8.0: A100, 8.6: RTX 30xx, 8.9: RTX 40xx, 9.0: H100, 12.0: RTX 50xx (Blackwell)
+ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0;12.0"
+# Force verbose compilation to see what architectures are being compiled
+ENV FORCE_CUDA="1"
+ENV MAX_JOBS="4"
+RUN pip install --no-cache-dir -v -r requirements-mamba.txt 2>&1 | tee /tmp/mamba-install.log
+
+# Copy application code
+COPY src/ ./src/
+COPY gui/backend/ ./gui/backend/
+COPY llm-lab.sh ./
+
+# Copy built frontend from builder stage
+COPY --from=frontend-builder /app/gui/frontend/dist ./gui/frontend/dist
+
+# Create necessary directories
+RUN mkdir -p cache outputs/pretraining outputs/sft outputs/rlhf gui/backend/cache
+
+# Expose port
+EXPOSE 8000
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app:/app/gui/backend
+
+# Set working directory to backend
+WORKDIR /app/gui/backend
+
+# Run the application
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

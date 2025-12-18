@@ -46,48 +46,56 @@ class GenerateResponse(BaseModel):
 @router.get("/checkpoints")
 async def list_checkpoints():
     """List available checkpoints"""
-    checkpoints_dir = Path(project_root) / "checkpoints"
+    backend_dir = Path(__file__).parent.parent
 
-    if not checkpoints_dir.exists():
-        return {"checkpoints": []}
+    # Check multiple checkpoint directories
+    checkpoint_dirs = [
+        backend_dir / "checkpoints",
+        backend_dir / "sft_checkpoints",
+        backend_dir / "rlhf_checkpoints"
+    ]
 
     checkpoints = []
-    for ckpt_file in checkpoints_dir.glob("*.pt"):
-        # Get file stats
-        stat = ckpt_file.stat()
+    for checkpoints_dir in checkpoint_dirs:
+        if not checkpoints_dir.exists():
+            continue
 
-        # Try to load checkpoint metadata
-        try:
-            checkpoint = torch.load(str(ckpt_file), map_location="cpu", weights_only=False)
-            step = checkpoint.get('step', 'N/A')
-            is_rlhf = 'rlhf_config' in checkpoint
-            is_sft = 'sft_config' in checkpoint
+        for ckpt_file in checkpoints_dir.glob("*.pt"):
+            # Get file stats
+            stat = ckpt_file.stat()
 
-            if is_rlhf:
-                model_type = "RLHF"
-            elif is_sft:
-                model_type = "SFT"
-            else:
-                model_type = "Base"
+            # Try to load checkpoint metadata
+            try:
+                checkpoint = torch.load(str(ckpt_file), map_location="cpu", weights_only=False)
+                step = checkpoint.get('step', 'N/A')
+                is_rlhf = 'rlhf_config' in checkpoint
+                is_sft = 'sft_config' in checkpoint
 
-            checkpoints.append({
-                "name": ckpt_file.name,
-                "path": str(ckpt_file),
-                "step": step,
-                "type": model_type,
-                "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                "modified": stat.st_mtime
-            })
-        except Exception as e:
-            # If we can't load the checkpoint, still list it but with minimal info
-            checkpoints.append({
-                "name": ckpt_file.name,
-                "path": str(ckpt_file),
-                "step": "Unknown",
-                "type": "Unknown",
-                "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                "modified": stat.st_mtime
-            })
+                if is_rlhf:
+                    model_type = "RLHF"
+                elif is_sft:
+                    model_type = "SFT"
+                else:
+                    model_type = "Base"
+
+                checkpoints.append({
+                    "name": ckpt_file.name,
+                    "path": str(ckpt_file),
+                    "step": step,
+                    "type": model_type,
+                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                    "modified": stat.st_mtime
+                })
+            except Exception as e:
+                # If we can't load the checkpoint, still list it but with minimal info
+                checkpoints.append({
+                    "name": ckpt_file.name,
+                    "path": str(ckpt_file),
+                    "step": "Unknown",
+                    "type": "Unknown",
+                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                    "modified": stat.st_mtime
+                })
 
     # Sort by modified time (newest first)
     checkpoints.sort(key=lambda x: x['modified'], reverse=True)

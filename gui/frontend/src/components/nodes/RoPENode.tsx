@@ -5,11 +5,10 @@ import { motion } from 'framer-motion';
 interface RoPENodeProps {
   data: {
     label: string;
-    max_seq_len?: number;
   };
 }
 
-export default memo(({ data }: RoPENodeProps) => {
+export default memo(({ data: _data }: RoPENodeProps) => {
   return (
     <motion.div
       initial={{ scale: 0.8, opacity: 0 }}
@@ -28,7 +27,7 @@ export default memo(({ data }: RoPENodeProps) => {
         <div>
           <div className="text-white font-bold text-sm">RoPE</div>
           <div className="text-blue-200 text-xs mt-1">
-            Max Length: {data.max_seq_len || 1024}
+            Rotary Position Embedding
           </div>
         </div>
       </div>

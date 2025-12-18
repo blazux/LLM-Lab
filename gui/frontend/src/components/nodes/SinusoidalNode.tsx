@@ -5,7 +5,6 @@ import { motion } from 'framer-motion';
 interface SinusoidalNodeProps {
   data: {
     label: string;
-    max_seq_len?: number;
   };
 }
 

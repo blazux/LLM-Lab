@@ -194,6 +194,12 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
                  checkpoint_path: Optional[str] = None, output_dir: str = "outputs/pretraining"):
     """Run training in a separate thread"""
     try:
+        # Clear CUDA cache before starting to free memory from previous runs
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+
         # Update training state
         training_state["is_training"] = True
         training_state["status"] = "starting"
@@ -209,7 +215,7 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
         metrics_queue.put({
             "type": "log",
             "level": "info",
-            "message": f"Config received - Model: d_model={model_config_dict.get('d_model')}, n_layers={model_config_dict.get('n_layers')}, attention={model_config_dict.get('attention_type')}",
+            "message": f"Config received - Model: architecture={model_config_dict.get('model_architecture')}, d_model={model_config_dict.get('d_model')}, n_layers={model_config_dict.get('n_layers')}, attention={model_config_dict.get('attention_type')}",
             "timestamp": time.time()
         })
 
@@ -253,6 +259,10 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
         training_state["status"] = "completed"
         training_state["is_training"] = False
 
+        # Clear CUDA cache after training completes
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     except Exception as e:
         # Training failed
         error_msg = str(e)
@@ -267,10 +277,20 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
             "timestamp": time.time()
         })
 
+        # Clear CUDA cache after training fails to free memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
 
 def run_sft(sft_config_dict: Dict):
     """Run SFT training in a separate thread"""
     try:
+        # Clear CUDA cache before starting to free memory from previous runs
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+
         # Update training state
         training_state["is_training"] = True
         training_state["status"] = "starting"
@@ -326,6 +346,10 @@ def run_sft(sft_config_dict: Dict):
         training_state["status"] = "completed"
         training_state["is_training"] = False
 
+        # Clear CUDA cache after training completes
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     except Exception as e:
         # Training failed
         error_msg = str(e)
@@ -339,6 +363,10 @@ def run_sft(sft_config_dict: Dict):
             "message": f"SFT training failed: {error_msg}",
             "timestamp": time.time()
         })
+
+        # Clear CUDA cache after training fails to free memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 @router.post("/start")
@@ -422,6 +450,12 @@ async def start_sft_training(request: SFTRequest):
 def run_rlhf(rlhf_config_dict: Dict):
     """Run RLHF training in a separate thread"""
     try:
+        # Clear CUDA cache before starting to free memory from previous runs
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+
         # Update training state
         training_state["is_training"] = True
         training_state["status"] = "starting"
@@ -495,6 +529,10 @@ def run_rlhf(rlhf_config_dict: Dict):
         training_state["status"] = "completed"
         training_state["is_training"] = False
 
+        # Clear CUDA cache after training completes
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     except Exception as e:
         # Training failed
         error_msg = str(e)
@@ -508,6 +546,10 @@ def run_rlhf(rlhf_config_dict: Dict):
             "message": f"RLHF training failed: {error_msg}",
             "timestamp": time.time()
         })
+
+        # Clear CUDA cache after training fails to free memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 @router.post("/rlhf/start")
