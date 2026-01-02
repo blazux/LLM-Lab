@@ -79,7 +79,7 @@ const TrainingCanvas = ({
   setTrainingNodes,
   setTrainingEdges
 }: TrainingCanvasProps) => {
-  const { updateTrainingState } = useTraining();
+  const { updateTrainingState, clearMetrics } = useTraining();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   // Use parent state for nodes/edges to persist across tab switches
@@ -227,6 +227,9 @@ const TrainingCanvas = ({
 
       // Build model config from Model Architecture nodes using the proper config generator
       const modelConfig = generateConfigFromNodes(modelNodes, modelEdges) as ModelConfigData;
+
+      // Clear previous metrics and logs
+      clearMetrics();
 
       // Reset training state
       updateTrainingState({

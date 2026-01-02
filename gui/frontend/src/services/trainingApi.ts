@@ -2,7 +2,7 @@
 const API_BASE_URL = import.meta.env.PROD ? '/api' : 'http://localhost:8000/api';
 
 export interface TrainingMetric {
-  type: 'metrics' | 'log' | 'status' | 'eval_metrics';
+  type: 'metrics' | 'log' | 'status' | 'eval_metrics' | 'snapshot';
   step?: number;
   loss?: number;
   lr?: number;
@@ -16,6 +16,13 @@ export interface TrainingMetric {
   // For status
   status?: string;
   error?: string | null;
+  // For snapshot (reconnect state)
+  is_training?: boolean;
+  current_step?: number;
+  max_steps?: number;
+  current_loss?: number | null;
+  current_ppl?: number | null;
+  current_lr?: number | null;
 }
 
 export interface ModelConfigData {
@@ -268,6 +275,18 @@ export function subscribeToMetrics(
       if (onError) onError(error as Error);
     }
   };
+
+  // Handle snapshot event (sent on initial connection/reconnection)
+  eventSource.addEventListener('snapshot', (event) => {
+    try {
+      const snapshot: TrainingMetric = JSON.parse((event as MessageEvent).data);
+      console.log('Received training state snapshot:', snapshot);
+      onMetric(snapshot);
+    } catch (error) {
+      console.error('Failed to parse snapshot:', error);
+      if (onError) onError(error as Error);
+    }
+  });
 
   eventSource.addEventListener('status', (event) => {
     try {

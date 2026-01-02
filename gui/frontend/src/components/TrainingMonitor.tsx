@@ -2,34 +2,14 @@ import { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Play, Pause, Square, Save, Terminal, TrendingDown, Zap, Clock, CheckCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { useTraining } from '../context/TrainingContext';
+import { useTraining, TrainingLog } from '../context/TrainingContext';
 import { subscribeToMetrics, TrainingMetric, stopTraining } from '../services/trainingApi';
 
-interface TrainingMetrics {
-  step: number;
-  loss: number;
-  perplexity: number;
-  learningRate: number;
-  timestamp: number;
-  evalLoss?: number;
-  evalPerplexity?: number;
-}
-
-interface TrainingLog {
-  timestamp: string;
-  level: 'info' | 'warning' | 'error' | 'success';
-  message: string;
-}
-
 const TrainingMonitor = () => {
-  const { trainingState, updateTrainingState } = useTraining();
-  const { isTraining, isPaused, progress, currentStep, maxSteps, currentLoss, currentPPL } = trainingState;
+  const { trainingState, updateTrainingState, addMetric, updateMetricWithEval, addLog } = useTraining();
+  const { isTraining, isPaused, progress, currentStep, maxSteps, currentLoss, currentPPL, metrics, logs } = trainingState;
 
   const [eta, setEta] = useState('--:--:--');
-  const [metrics, setMetrics] = useState<TrainingMetrics[]>([]);
-  const [logs, setLogs] = useState<TrainingLog[]>([
-    { timestamp: new Date().toISOString(), level: 'info', message: 'Training monitor ready. Configure your model and click "Start Training".' }
-  ]);
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const startTimeRef = useRef<number | null>(null);
   const lastStepRef = useRef<number>(0);
@@ -40,7 +20,28 @@ const TrainingMonitor = () => {
       // Subscribe to metrics stream
       const unsubscribe = subscribeToMetrics(
         (metric: TrainingMetric) => {
-          if (metric.type === 'metrics' && metric.step !== undefined) {
+          if (metric.type === 'snapshot') {
+            // Handle snapshot (reconnect state)
+            console.log('Received snapshot, restoring state:', metric);
+
+            // Update training state with current server state
+            updateTrainingState({
+              currentStep: metric.current_step ?? 0,
+              currentLoss: metric.current_loss ?? null,
+              currentPPL: metric.current_ppl ?? null,
+              currentLR: metric.current_lr ?? null,
+              maxSteps: metric.max_steps ?? maxSteps,
+              progress: (metric.max_steps && metric.current_step)
+                ? (metric.current_step / metric.max_steps) * 100
+                : 0
+            });
+
+            // Reset timing on reconnect
+            startTimeRef.current = Date.now();
+            lastStepRef.current = metric.current_step ?? 0;
+
+            addLog('info', `Reconnected to training at step ${metric.current_step || 0}`);
+          } else if (metric.type === 'metrics' && metric.step !== undefined) {
             // Initialize start time on first metric
             if (!startTimeRef.current) {
               startTimeRef.current = Date.now();
@@ -74,42 +75,16 @@ const TrainingMonitor = () => {
             });
 
             // Add to metrics history
-            setMetrics(prev => {
-              const newMetric: TrainingMetrics = {
-                step: metric.step!,
-                loss: metric.loss!,
-                perplexity: metric.perplexity!,
-                learningRate: metric.lr!,
-                timestamp: metric.timestamp
-              };
-              return [...prev, newMetric];
+            addMetric({
+              step: metric.step!,
+              loss: metric.loss!,
+              perplexity: metric.perplexity!,
+              learningRate: metric.lr!,
+              timestamp: metric.timestamp
             });
           } else if (metric.type === 'eval_metrics' && metric.step !== undefined) {
             // Update metrics with eval data
-            setMetrics(prev => {
-              const existingIndex = prev.findIndex(m => m.step === metric.step);
-              if (existingIndex >= 0) {
-                // Update existing metric with eval data
-                const updated = [...prev];
-                updated[existingIndex] = {
-                  ...updated[existingIndex],
-                  evalLoss: metric.eval_loss,
-                  evalPerplexity: metric.eval_perplexity
-                };
-                return updated;
-              } else {
-                // Create new entry with eval data only (shouldn't happen normally)
-                return [...prev, {
-                  step: metric.step!,
-                  loss: 0,
-                  perplexity: 0,
-                  learningRate: 0,
-                  timestamp: metric.timestamp,
-                  evalLoss: metric.eval_loss,
-                  evalPerplexity: metric.eval_perplexity
-                }];
-              }
-            });
+            updateMetricWithEval(metric.step!, metric.eval_loss!, metric.eval_perplexity!);
           } else if (metric.type === 'log' && metric.message) {
             // Add log message
             addLog(metric.level as TrainingLog['level'], metric.message);
@@ -143,15 +118,7 @@ const TrainingMonitor = () => {
       lastStepRef.current = 0;
       setEta('--:--:--');
     }
-  }, [isTraining, isPaused, maxSteps, updateTrainingState]);
-
-  const addLog = (level: TrainingLog['level'], message: string) => {
-    setLogs(prev => [...prev, {
-      timestamp: new Date().toISOString(),
-      level,
-      message
-    }].slice(-100)); // Keep last 100 logs
-  };
+  }, [isTraining, isPaused, maxSteps, updateTrainingState, addMetric, updateMetricWithEval, addLog]);
 
   const handlePause = () => {
     // TODO: Implement pause/resume in backend

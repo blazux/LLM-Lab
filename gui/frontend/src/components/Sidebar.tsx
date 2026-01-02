@@ -62,6 +62,13 @@ const MODEL_BLOCKS = [
         color: 'from-violet-500 to-violet-700',
         description: 'Classic encoding'
       },
+      {
+        id: 'learned',
+        label: 'Learned',
+        emoji: '🎓',
+        color: 'from-fuchsia-500 to-fuchsia-700',
+        description: 'Trainable positions'
+      },
     ]
   },
   {
@@ -127,6 +134,20 @@ const MODEL_BLOCKS = [
         description: 'Modern activation'
       },
       {
+        id: 'geglu',
+        label: 'GeGLU',
+        emoji: '🔥',
+        color: 'from-orange-500 to-orange-700',
+        description: 'GELU-gated activation'
+      },
+      {
+        id: 'reglu',
+        label: 'ReGLU',
+        emoji: '🔺',
+        color: 'from-red-500 to-red-700',
+        description: 'ReLU-gated activation'
+      },
+      {
         id: 'gelu',
         label: 'GELU',
         emoji: '💫',
@@ -136,7 +157,7 @@ const MODEL_BLOCKS = [
       {
         id: 'relu',
         label: 'ReLU',
-        emoji: '🔺',
+        emoji: '🔻',
         color: 'from-pink-500 to-pink-700',
         description: 'Classic activation'
       },

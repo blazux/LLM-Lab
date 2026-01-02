@@ -15,48 +15,53 @@ A flexible framework for training and fine-tuning Large Language Models from scr
 
 ### Option 1: Docker (Recommended)
 
-We provide two Docker images to suit different needs:
+We provide two Docker images to suit different needs. **Both images use CUDA 12.8 and PyTorch 2.7.0 stable** with support for modern GPUs including the RTX 5090/5080 (Blackwell), RTX 40xx, RTX 30xx, RTX 20xx, A100, H100, and V100.
 
-#### Standard Image (Universal Compatibility)
-Lightweight image that works on any system with GPU or CPU. Uses PyTorch-based Mamba2 implementation.
+**Requirements (both images):**
+- NVIDIA GPU with CUDA support (compute capability 7.0+)
+- Docker with NVIDIA Container Toolkit (nvidia-docker)
+
+#### Standard Image (PyTorch Mamba2)
+Uses pure PyTorch implementation for Mamba2 (no mamba-ssm optimized kernels).
 
 **Best for:**
 - Quick testing and development
-- Systems without NVIDIA GPUs
-- Maximum compatibility across hardware
-- Smaller Mamba2 models (reduce batch size/sequence length for large models)
+- Transformer architectures (same performance as CUDA image)
+- Smaller Mamba2 models with reduced batch size/sequence length
+- Faster builds (no kernel compilation)
 
 ```bash
 docker run -d -p 8000:8000 \
   --gpus all \
-  -v $(pwd)/checkpoints:/app/gui/backend/checkpoints \
-  -v $(pwd)/cache:/app/cache \
+  -v $(pwd)/data:/app/data \
   --name llm-lab \
   blazux/llm-lab:latest
 ```
 
-#### CUDA Image (High Performance)
-Optimized image with CUDA 12.8 and mamba-ssm kernels compiled for multiple GPU architectures.
+#### CUDA Image (mamba-ssm Optimized)
+Includes mamba-ssm optimized CUDA kernels for high-performance Mamba2 training.
 
 **Best for:**
-- Production Mamba2 training (100x more memory efficient)
-- Large models and long sequences
-- NVIDIA GPUs: V100, RTX 20xx/30xx/40xx/50xx, A100, H100
-
-**Requirements:**
-- NVIDIA GPU with CUDA support (compute capability 7.0+)
-- Docker with NVIDIA Container Toolkit (nvidia-docker)
+- Production Mamba2 training (100x more memory efficient than PyTorch fallback)
+- Large Mamba2 models with long sequences
+- Maximum Mamba2 performance
 
 ```bash
 docker run -d -p 8000:8000 \
   --gpus all \
-  -v $(pwd)/checkpoints:/app/gui/backend/checkpoints \
-  -v $(pwd)/cache:/app/cache \
+  -v $(pwd)/data:/app/data \
   --name llm-lab \
   blazux/llm-lab:cuda
 ```
 
-**Note:** The CUDA image is significantly larger (~8GB vs ~2GB) due to compiled kernels for multiple GPU architectures.
+**Note:** The CUDA image includes pre-compiled mamba-ssm kernels for multiple GPU architectures (compute capability 7.0 through 12.0). **The only difference between the images is the presence of mamba-ssm.**
+
+**Data Directory Structure:**
+The single `data/` volume mount contains all persistent data:
+- `data/checkpoints/` - Base training checkpoints
+- `data/sft_checkpoints/` - Supervised fine-tuning checkpoints
+- `data/rlhf_checkpoints/` - RLHF training checkpoints
+- `data/cache/` - Model and dataset cache
 
 ---
 
@@ -84,16 +89,22 @@ The web interface provides a visual workflow for configuring and training your m
 
 ### Option 2: Local Installation
 
+**Install PyTorch 2.7.0+ with CUDA 12.8:**
+```bash
+pip install torch>=2.7.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
+
+**Install base requirements:**
 ```bash
 pip install -r requirements.txt
 ```
 
-**For Mamba2 support (requires CUDA):**
+**For Mamba2 optimized support (optional):**
 ```bash
 pip install -r requirements-mamba.txt
 ```
 
-**Note**: This installs the optimized `mamba-ssm` CUDA kernels which are required for training Mamba2 models efficiently. Requires CUDA toolkit (nvcc) to be installed.
+**Note**: Installing `mamba-ssm` provides optimized CUDA kernels for efficient Mamba2 training (100x more memory efficient). Requires CUDA toolkit (nvcc) to be installed. Without mamba-ssm, the framework uses a pure PyTorch fallback implementation.
 
 ### Training Workflow
 
@@ -125,8 +136,10 @@ pip install -r requirements-mamba.txt
 
 ## Requirements
 
-- Python 3.8+
-- PyTorch 2.0+ with CUDA
+- Python 3.11+
+- PyTorch 2.7.0+ with CUDA 12.8
+- NVIDIA GPU with CUDA support (compute capability 7.0+)
+  - Supported: RTX 5090/5080, RTX 40xx, RTX 30xx, RTX 20xx, A100, H100, V100
 - GPU with bfloat16 support (recommended)
 - See `requirements.txt` for full dependencies
 

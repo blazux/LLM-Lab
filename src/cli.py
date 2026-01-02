@@ -453,7 +453,7 @@ def start_training():
     load_optimizer_state = True
     resume = get_input("\nResume from checkpoint? [y/n]", default="n")
     if resume.lower() in ['y', 'yes']:
-        checkpoint_path = get_input("Checkpoint path", default="checkpoints/best_model.pt")
+        checkpoint_path = get_input("Checkpoint path", default="data/checkpoints/best_model.pt")
         if not os.path.exists(checkpoint_path):
             print(f"⚠️  Checkpoint not found: {checkpoint_path}")
             checkpoint_path = None
@@ -487,7 +487,7 @@ def start_training():
                 checkpoint_path = None
 
     # Output directory
-    output_dir = get_input("\nOutput directory", default="checkpoints")
+    output_dir = get_input("\nOutput directory", default="data/checkpoints")
 
     # Confirm and start
     print(f"\n{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
@@ -795,7 +795,7 @@ def merge_lora_adapters():
     try:
         if input_type == "2":
             # Load from adapter folder (new method)
-            adapter_path = get_input("LoRA adapter folder path", default="sft_checkpoints/best_lora_adapters")
+            adapter_path = get_input("LoRA adapter folder path", default="data/sft_checkpoints/best_lora_adapters")
 
             if not os.path.exists(adapter_path):
                 print(f"❌ Adapter folder not found: {adapter_path}")
@@ -808,7 +808,7 @@ def merge_lora_adapters():
                 return
 
             # Get base model checkpoint
-            base_checkpoint_path = get_input("Base model checkpoint path", default="checkpoints/best_model.pt")
+            base_checkpoint_path = get_input("Base model checkpoint path", default="data/checkpoints/best_model.pt")
 
             if not os.path.exists(base_checkpoint_path):
                 print(f"❌ Base checkpoint not found: {base_checkpoint_path}")
@@ -867,7 +867,7 @@ def merge_lora_adapters():
             return
 
         # Original method: Load from full checkpoint
-        checkpoint_path = get_input("LoRA checkpoint path", default="sft_checkpoints/best_model.pt")
+        checkpoint_path = get_input("LoRA checkpoint path", default="data/sft_checkpoints/best_model.pt")
 
         if not os.path.exists(checkpoint_path):
             print(f"❌ Checkpoint not found: {checkpoint_path}")
@@ -1013,7 +1013,7 @@ def start_inference():
     """Start inference mode"""
     print_section_header("Interactive Inference Mode", "💬")
 
-    checkpoint_path = get_input("Checkpoint path", default="checkpoints/best_model.pt")
+    checkpoint_path = get_input("Checkpoint path", default="data/checkpoints/best_model.pt")
 
     if not os.path.exists(checkpoint_path):
         print_error(f"Checkpoint not found: {checkpoint_path}")

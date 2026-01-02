@@ -139,6 +139,18 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
           </div>
         );
 
+      case 'learned':
+        return (
+          <div className="space-y-4">
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">Learned Positional Embeddings are trainable position vectors (like BERT/GPT-1). Classic baseline for comparing against modern methods like RoPE.</p>
+              <p className="text-xs text-slate-400 mt-2">
+                Note: Max sequence length is configured in the Embedding node.
+              </p>
+            </div>
+          </div>
+        );
+
       // Attention nodes
       case 'mha':
         return (
@@ -155,6 +167,21 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
               />
               <p className="text-xs text-slate-400 mt-1">
                 Multi-Head Attention splits attention into multiple heads for richer representations
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Sliding Window Size
+              </label>
+              <input
+                type="number"
+                value={node.data.sliding_window || ''}
+                onChange={(e) => handleChange('sliding_window', e.target.value ? parseInt(e.target.value) : null)}
+                placeholder="None (full attention)"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Limit attention to nearby tokens (e.g., 512, 1024, 2048). Leave empty for full attention.
               </p>
             </div>
           </div>
@@ -190,6 +217,21 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
             <p className="text-xs text-slate-400">
               Grouped-Query Attention groups multiple query heads per key/value head for efficiency
             </p>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Sliding Window Size
+              </label>
+              <input
+                type="number"
+                value={node.data.sliding_window || ''}
+                onChange={(e) => handleChange('sliding_window', e.target.value ? parseInt(e.target.value) : null)}
+                placeholder="None (full attention)"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Limit attention to nearby tokens (e.g., 512, 1024, 2048). Leave empty for full attention.
+              </p>
+            </div>
           </div>
         );
 
@@ -208,6 +250,21 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
               />
               <p className="text-xs text-slate-400 mt-1">
                 Multi-Query Attention uses a single key/value head shared across all query heads
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Sliding Window Size
+              </label>
+              <input
+                type="number"
+                value={node.data.sliding_window || ''}
+                onChange={(e) => handleChange('sliding_window', e.target.value ? parseInt(e.target.value) : null)}
+                placeholder="None (full attention)"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Limit attention to nearby tokens (e.g., 512, 1024, 2048). Leave empty for full attention.
               </p>
             </div>
           </div>
@@ -260,6 +317,21 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 Separate latent dimension for RoPE (default: d_model / n_heads)
               </p>
             </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Sliding Window Size
+              </label>
+              <input
+                type="number"
+                value={node.data.sliding_window || ''}
+                onChange={(e) => handleChange('sliding_window', e.target.value ? parseInt(e.target.value) : null)}
+                placeholder="None (full attention)"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Limit attention to nearby tokens (e.g., 512, 1024, 2048). Leave empty for full attention.
+              </p>
+            </div>
           </div>
         );
 
@@ -300,6 +372,46 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
               />
               <p className="text-xs text-slate-400 mt-1">
                 SwiGLU is a modern activation function used in state-of-the-art models
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'geglu':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Hidden Dimension (d_ff)
+              </label>
+              <input
+                type="number"
+                value={node.data.d_ff || 3584}
+                onChange={(e) => handleChange('d_ff', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                GeGLU (GELU-Gated Linear Unit) is used in T5, PaLM, and many modern LLMs
+              </p>
+            </div>
+          </div>
+        );
+
+      case 'reglu':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Hidden Dimension (d_ff)
+              </label>
+              <input
+                type="number"
+                value={node.data.d_ff || 3584}
+                onChange={(e) => handleChange('d_ff', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                ReGLU (ReLU-Gated Linear Unit) is simpler and faster than SwiGLU/GeGLU
               </p>
             </div>
           </div>

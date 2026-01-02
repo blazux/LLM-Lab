@@ -48,11 +48,11 @@ async def list_checkpoints():
     """List available checkpoints"""
     backend_dir = Path(__file__).parent.parent
 
-    # Check multiple checkpoint directories
+    # Check multiple checkpoint directories under /app/data/
     checkpoint_dirs = [
-        backend_dir / "checkpoints",
-        backend_dir / "sft_checkpoints",
-        backend_dir / "rlhf_checkpoints"
+        Path("/app/data/checkpoints"),
+        Path("/app/data/sft_checkpoints"),
+        Path("/app/data/rlhf_checkpoints")
     ]
 
     checkpoints = []

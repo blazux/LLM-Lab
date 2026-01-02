@@ -188,7 +188,7 @@ class TrainingConfig:
     """Training configuration"""
 
     # Model
-    model_config_path: str = "outputs/pretraining/model_config.json"
+    model_config_path: str = "data/checkpoints/model_config.json"
 
     # Training steps
     max_steps: int = 10000

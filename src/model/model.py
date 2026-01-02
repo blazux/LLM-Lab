@@ -10,6 +10,8 @@ from .bricks import (
     NORM_TYPES,
     ACTIVATION_TYPES,
     SwiGLU,
+    GeGLU,
+    ReGLU,
     StandardFFN
 )
 
@@ -30,6 +32,10 @@ class TransformerBlock(nn.Module):
         # Feed-forward
         if config.activation == 'swiglu':
             self.feed_forward = SwiGLU(config.d_model, config.d_ff, config.dropout)
+        elif config.activation == 'geglu':
+            self.feed_forward = GeGLU(config.d_model, config.d_ff, config.dropout)
+        elif config.activation == 'reglu':
+            self.feed_forward = ReGLU(config.d_model, config.d_ff, config.dropout)
         else:
             self.feed_forward = StandardFFN(config.d_model, config.d_ff, config.activation, config.dropout)
 
@@ -67,8 +73,8 @@ class TransformerLLM(nn.Module):
             # ALiBi is also applied in attention
             self.pos_encoding = None
             self.position_dropout = nn.Dropout(config.dropout)
-        elif config.positional_encoding == 'sinusoidal':
-            PosClass = POSITIONAL_ENCODINGS['sinusoidal']
+        elif config.positional_encoding in ['sinusoidal', 'learned']:
+            PosClass = POSITIONAL_ENCODINGS[config.positional_encoding]
             self.pos_encoding = PosClass(config.d_model, config.max_seq_len)
             self.position_dropout = nn.Dropout(config.dropout)
         else:

@@ -17,6 +17,10 @@ interface ModelConfig {
   n_heads?: number;
   n_kv_heads?: number;
   d_ff?: number;
+  sliding_window?: number | null;
+  // MLA-specific
+  d_latent?: number | null;
+  d_rope_latent?: number | null;
   // Mamba2-specific
   state_size?: number;
   expand_factor?: number;
@@ -98,26 +102,35 @@ export const generateConfigFromNodes = (
       case 'sinusoidal':
         config.positional_encoding = 'sinusoidal';
         break;
+      case 'learned':
+        config.positional_encoding = 'learned';
+        break;
 
       // Attention nodes (Transformer only)
       case 'mha':
         config.attention_type = 'mha';
         config.n_heads = node.data.n_heads || 14;
         config.n_kv_heads = node.data.n_heads || 14; // MHA has same number of KV heads as Q heads
+        config.sliding_window = node.data.sliding_window || null;
         break;
       case 'gqa':
         config.attention_type = 'gqa';
         config.n_heads = node.data.n_heads || 14;
         config.n_kv_heads = node.data.n_kv_heads || 2;
+        config.sliding_window = node.data.sliding_window || null;
         break;
       case 'mqa':
         config.attention_type = 'mqa';
         config.n_heads = node.data.n_heads || 14;
         config.n_kv_heads = 1; // MQA always uses 1 KV head
+        config.sliding_window = node.data.sliding_window || null;
         break;
       case 'mla':
         config.attention_type = 'mla';
         config.n_heads = node.data.n_heads || 14;
+        config.sliding_window = node.data.sliding_window || null;
+        config.d_latent = node.data.d_latent || null;
+        config.d_rope_latent = node.data.d_rope_latent || null;
         break;
 
       // Normalization nodes (both architectures)
@@ -131,6 +144,14 @@ export const generateConfigFromNodes = (
       // FFN nodes (Transformer only)
       case 'swiglu':
         config.activation = 'swiglu';
+        config.d_ff = node.data.d_ff || 3584;
+        break;
+      case 'geglu':
+        config.activation = 'geglu';
+        config.d_ff = node.data.d_ff || 3584;
+        break;
+      case 'reglu':
+        config.activation = 'reglu';
         config.d_ff = node.data.d_ff || 3584;
         break;
       case 'gelu':

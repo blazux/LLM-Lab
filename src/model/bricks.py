@@ -8,6 +8,23 @@ import math
 # POSITIONAL ENCODINGS
 # ============================================================================
 
+class LearnedPositional(nn.Module):
+    """Learned positional embeddings (like BERT/GPT-1)
+
+    Simple trainable position embeddings. Classic baseline for comparing
+    against modern methods like RoPE. Each position has a learned vector.
+    """
+    def __init__(self, d_model: int, max_seq_len: int):
+        super().__init__()
+        self.position_embeddings = nn.Embedding(max_seq_len, d_model)
+
+    def forward(self, x):
+        """x: (batch, seq_len, d_model)"""
+        seq_len = x.size(1)
+        positions = torch.arange(seq_len, device=x.device).unsqueeze(0)
+        return x + self.position_embeddings(positions)
+
+
 class SinusoidalPositional(nn.Module):
     """Sinusoidal positional encoding (original Transformer)"""
     def __init__(self, d_model: int, max_seq_len: int):
@@ -113,13 +130,14 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 
 class MultiHeadAttention(nn.Module):
-    """Standard Multi-Head Attention"""
+    """Standard Multi-Head Attention with optional sliding window"""
     def __init__(self, config):
         super().__init__()
         self.d_model = config.d_model
         self.n_heads = config.n_heads
         self.d_k = config.d_k
         self.dropout = config.dropout
+        self.sliding_window = config.sliding_window
 
         self.q_proj = nn.Linear(self.d_model, self.d_model, bias=config.attention_bias)
         self.k_proj = nn.Linear(self.d_model, self.d_model, bias=config.attention_bias)
@@ -140,8 +158,21 @@ class MultiHeadAttention(nn.Module):
             q = self.pos_encoding(q)
             k = self.pos_encoding(k)
 
+        # Create attention mask for sliding window if specified
+        attn_mask = None
+        if self.sliding_window is not None and self.sliding_window > 0:
+            # Create sliding window mask: each position can only attend to
+            # previous sliding_window positions
+            attn_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
+            attn_mask = torch.triu(attn_mask, diagonal=1)  # Causal mask
+            # Add sliding window constraint
+            for i in range(seq_len):
+                if i > self.sliding_window:
+                    attn_mask[i, :i-self.sliding_window] = True  # Mask positions beyond window
+            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
+
         attn_output = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
+            q, k, v, attn_mask=attn_mask, is_causal=(attn_mask is None), dropout_p=self.dropout if self.training else 0.0
         )
 
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
@@ -149,13 +180,14 @@ class MultiHeadAttention(nn.Module):
 
 
 class MultiQueryAttention(nn.Module):
-    """Multi-Query Attention (single K/V head)"""
+    """Multi-Query Attention (single K/V head) with optional sliding window"""
     def __init__(self, config):
         super().__init__()
         self.d_model = config.d_model
         self.n_heads = config.n_heads
         self.d_k = config.d_k
         self.dropout = config.dropout
+        self.sliding_window = config.sliding_window
 
         self.q_proj = nn.Linear(self.d_model, self.d_model, bias=config.attention_bias)
         self.k_proj = nn.Linear(self.d_model, self.d_k, bias=config.attention_bias)
@@ -178,8 +210,21 @@ class MultiQueryAttention(nn.Module):
         k = repeat_kv(k, self.n_heads)
         v = repeat_kv(v, self.n_heads)
 
+        # Create attention mask for sliding window if specified
+        attn_mask = None
+        if self.sliding_window is not None and self.sliding_window > 0:
+            # Create sliding window mask: each position can only attend to
+            # previous sliding_window positions
+            attn_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
+            attn_mask = torch.triu(attn_mask, diagonal=1)  # Causal mask
+            # Add sliding window constraint
+            for i in range(seq_len):
+                if i > self.sliding_window:
+                    attn_mask[i, :i-self.sliding_window] = True  # Mask positions beyond window
+            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
+
         attn_output = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
+            q, k, v, attn_mask=attn_mask, is_causal=(attn_mask is None), dropout_p=self.dropout if self.training else 0.0
         )
 
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
@@ -288,6 +333,7 @@ class MultiHeadLatentAttention(nn.Module):
         self.d_latent = config.d_latent
         self.dropout = config.dropout
         self.positional_encoding = config.positional_encoding
+        self.sliding_window = config.sliding_window
 
         # Standard Q projection
         self.q_proj = nn.Linear(self.d_model, self.n_heads * self.d_k, bias=config.attention_bias)
@@ -390,10 +436,24 @@ class MultiHeadLatentAttention(nn.Module):
             k = self.k_norm(k)
             k = k.transpose(1, 2)  # Back to (batch, n_heads, seq_len, d_k)
 
+        # Create attention mask for sliding window if specified
+        attn_mask = None
+        if self.sliding_window is not None and self.sliding_window > 0:
+            # Create sliding window mask: each position can only attend to
+            # previous sliding_window positions
+            attn_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
+            attn_mask = torch.triu(attn_mask, diagonal=1)  # Causal mask
+            # Add sliding window constraint
+            for i in range(seq_len):
+                if i > self.sliding_window:
+                    attn_mask[i, :i-self.sliding_window] = True  # Mask positions beyond window
+            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
+
         # Scaled dot-product attention (uses Flash Attention via PyTorch)
         attn_output = F.scaled_dot_product_attention(
             q, k, v,
-            is_causal=True,
+            attn_mask=attn_mask,
+            is_causal=(attn_mask is None),
             dropout_p=self.dropout if self.training else 0.0
         )
 
@@ -417,6 +477,40 @@ class SwiGLU(nn.Module):
 
     def forward(self, x):
         return self.down_proj(self.dropout(F.silu(self.gate_proj(x)) * self.up_proj(x)))
+
+
+class GeGLU(nn.Module):
+    """GeGLU activation (GELU-Gated Linear Unit)
+
+    Used in T5, PaLM, and many modern LLMs. Often performs better than SwiGLU
+    for certain tasks. Same structure as SwiGLU but with GELU activation.
+    """
+    def __init__(self, d_model: int, d_ff: int, dropout: float = 0.0):
+        super().__init__()
+        self.gate_proj = nn.Linear(d_model, d_ff, bias=False)
+        self.up_proj = nn.Linear(d_model, d_ff, bias=False)
+        self.down_proj = nn.Linear(d_ff, d_model, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        return self.down_proj(self.dropout(F.gelu(self.gate_proj(x)) * self.up_proj(x)))
+
+
+class ReGLU(nn.Module):
+    """ReGLU activation (ReLU-Gated Linear Unit)
+
+    Simpler and faster than SwiGLU/GeGLU. Good baseline for comparison.
+    Uses ReLU activation instead of smooth functions.
+    """
+    def __init__(self, d_model: int, d_ff: int, dropout: float = 0.0):
+        super().__init__()
+        self.gate_proj = nn.Linear(d_model, d_ff, bias=False)
+        self.up_proj = nn.Linear(d_model, d_ff, bias=False)
+        self.down_proj = nn.Linear(d_ff, d_model, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        return self.down_proj(self.dropout(F.relu(self.gate_proj(x)) * self.up_proj(x)))
 
 
 class StandardFFN(nn.Module):
@@ -707,6 +801,7 @@ class Mamba2Block(nn.Module):
 # ============================================================================
 
 POSITIONAL_ENCODINGS = {
+    'learned': LearnedPositional,
     'sinusoidal': SinusoidalPositional,
     'rope': RoPE,
     'alibi': ALiBi,
@@ -730,5 +825,7 @@ ACTIVATION_TYPES = {
     'gelu': 'gelu',
     'silu': 'silu',
     'leaky_relu': 'leaky_relu',
-    'swiglu': SwiGLU
+    'swiglu': SwiGLU,
+    'geglu': GeGLU,
+    'reglu': ReGLU
 }

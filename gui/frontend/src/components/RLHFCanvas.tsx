@@ -61,7 +61,7 @@ const initialNodes: Node[] = [
     position: { x: 400, y: 300 },
     data: {
       label: 'Policy Model',
-      checkpoint_path: 'checkpoints/best_model.pt',
+      checkpoint_path: '/app/data/checkpoints/best_model.pt',
     },
   },
 ];
@@ -81,7 +81,7 @@ const RLHFCanvas = ({
   setRlhfNodes,
   setRlhfEdges
 }: RLHFCanvasProps) => {
-  const { updateTrainingState } = useTraining();
+  const { updateTrainingState, clearMetrics } = useTraining();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(rlhfNodes.length > 0 ? rlhfNodes : initialNodes);
@@ -226,7 +226,7 @@ const RLHFCanvas = ({
       // Build base RLHF config
       const rlhfConfig: RLHFConfigData = {
         algorithm,
-        policy_checkpoint: policyNode.data.checkpoint_path || 'checkpoints/best_model.pt',
+        policy_checkpoint: policyNode.data.checkpoint_path || '/app/data/checkpoints/best_model.pt',
         datasets: datasets,
         optimizer: optimizerNode.type || 'adamw',
         learning_rate: hyperparamsNode?.data.learning_rate || 1.4e-5,
@@ -239,7 +239,7 @@ const RLHFCanvas = ({
         log_every: 10,
         save_every: 500,
         eval_every: 500,
-        output_dir: 'rlhf_checkpoints',
+        output_dir: '/app/data/rlhf_checkpoints',
 
         // Generation parameters
         max_new_tokens: hyperparamsNode?.data.max_new_tokens || 128,
@@ -296,6 +296,9 @@ const RLHFCanvas = ({
         rlhfConfig.grpo_temperature = hyperparamsNode?.data.grpo_temperature || 1.0;
         rlhfConfig.ppo_epochs = hyperparamsNode?.data.ppo_epochs || 4;
       }
+
+      // Clear previous metrics and logs
+      clearMetrics();
 
       // Reset training state
       updateTrainingState({

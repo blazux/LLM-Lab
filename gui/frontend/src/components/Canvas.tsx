@@ -36,6 +36,7 @@ import RoPENode from './nodes/RoPENode';
 import ALiBiNode from './nodes/ALiBiNode';
 import YARNNode from './nodes/YARNNode';
 import SinusoidalNode from './nodes/SinusoidalNode';
+import LearnedPositionalNode from './nodes/LearnedPositionalNode';
 // Attention nodes
 import MHANode from './nodes/MHANode';
 import GQANode from './nodes/GQANode';
@@ -46,6 +47,8 @@ import RMSNormNode from './nodes/RMSNormNode';
 import LayerNormNode from './nodes/LayerNormNode';
 // FFN nodes
 import SwiGLUNode from './nodes/SwiGLUNode';
+import GeGLUNode from './nodes/GeGLUNode';
+import ReGLUNode from './nodes/ReGLUNode';
 import GELUNode from './nodes/GELUNode';
 import ReLUNode from './nodes/ReLUNode';
 // Mamba2 nodes
@@ -66,6 +69,7 @@ const nodeTypes = {
   alibi: ALiBiNode,
   yarn: YARNNode,
   sinusoidal: SinusoidalNode,
+  learned: LearnedPositionalNode,
   // Attention mechanisms
   mha: MHANode,
   gqa: GQANode,
@@ -76,6 +80,8 @@ const nodeTypes = {
   layernorm: LayerNormNode,
   // Feed forward
   swiglu: SwiGLUNode,
+  geglu: GeGLUNode,
+  reglu: ReGLUNode,
   gelu: GELUNode,
   relu: ReLUNode,
   // Mamba2 components

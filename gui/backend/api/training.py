@@ -47,7 +47,7 @@ class TrainingRequest(BaseModel):
     model_cfg: Dict[str, Any]
     training_cfg: Dict[str, Any]
     checkpoint_path: Optional[str] = None
-    output_dir: str = "outputs/pretraining"
+    output_dir: str = "/app/data/checkpoints"
 
 
 class RLHFRequest(BaseModel):
@@ -191,7 +191,7 @@ class MetricsCallback:
 
 
 def run_training(model_config_dict: Dict, train_config_dict: Dict,
-                 checkpoint_path: Optional[str] = None, output_dir: str = "outputs/pretraining"):
+                 checkpoint_path: Optional[str] = None, output_dir: str = "/app/data/checkpoints"):
     """Run training in a separate thread"""
     try:
         # Clear CUDA cache before starting to free memory from previous runs
@@ -616,6 +616,39 @@ async def stream_metrics():
     async def event_generator():
         """Generate SSE events from metrics queue"""
         try:
+            # On new connection, send current state snapshot
+            snapshot = {
+                "type": "snapshot",
+                "is_training": training_state["is_training"],
+                "current_step": training_state["current_step"],
+                "max_steps": training_state["max_steps"],
+                "current_loss": training_state["current_loss"],
+                "current_ppl": training_state["current_ppl"],
+                "current_lr": training_state["current_lr"],
+                "status": training_state["status"],
+                "error": training_state["error"],
+                "timestamp": time.time()
+            }
+            yield {
+                "event": "snapshot",
+                "data": json.dumps(snapshot)
+            }
+
+            # Clear old backlogged metrics from queue
+            # This prevents flooding the client with old metrics when reconnecting
+            cleared_count = 0
+            while not metrics_queue.empty():
+                try:
+                    metrics_queue.get_nowait()
+                    cleared_count += 1
+                except queue.Empty:
+                    break
+
+            # Log if we cleared metrics (useful for debugging)
+            if cleared_count > 0:
+                print(f"SSE reconnect: Cleared {cleared_count} old metrics from queue")
+
+            # Now stream only new real-time metrics
             while True:
                 # Check if there are metrics in queue
                 try:
