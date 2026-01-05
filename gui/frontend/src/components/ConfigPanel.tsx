@@ -1,6 +1,8 @@
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X } from 'lucide-react';
 import { Node } from 'reactflow';
+import { getCheckpoints, Checkpoint } from '../services/trainingApi';
 
 interface ConfigPanelProps {
   node: Node | null;
@@ -9,6 +11,30 @@ interface ConfigPanelProps {
 }
 
 const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
+  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
+  const [loadingCheckpoints, setLoadingCheckpoints] = useState(false);
+  const [useCustomPath, setUseCustomPath] = useState(false);
+
+  // Fetch checkpoints when needed
+  useEffect(() => {
+    const shouldFetchCheckpoints =
+      (node?.type === 'model' && node?.data?.resume_training) ||
+      node?.type === 'basemodel';
+
+    if (shouldFetchCheckpoints) {
+      setLoadingCheckpoints(true);
+      getCheckpoints()
+        .then((ckpts) => {
+          setCheckpoints(ckpts);
+          setLoadingCheckpoints(false);
+        })
+        .catch((err) => {
+          console.error('Failed to fetch checkpoints:', err);
+          setLoadingCheckpoints(false);
+        });
+    }
+  }, [node?.type, node?.data?.resume_training]);
+
   if (!node) return null;
 
   const handleChange = (key: string, value: any) => {
@@ -1139,6 +1165,9 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 onChange={(e) => handleChange('max_steps', parseInt(e.target.value))}
                 className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
               />
+              <p className="text-xs text-slate-400 mt-1">
+                Total steps for fresh training, or additional steps when resuming from checkpoint
+              </p>
             </div>
             <div>
               <label className="text-sm font-medium text-slate-300 mb-2 block">
@@ -1246,20 +1275,94 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
             </div>
 
             {node.data.resume_training && (
-              <div>
-                <label className="text-sm font-medium text-slate-300 mb-2 block">
-                  Checkpoint Path
-                </label>
-                <input
-                  type="text"
-                  value={node.data.checkpoint_path || ''}
-                  onChange={(e) => handleChange('checkpoint_path', e.target.value)}
-                  placeholder="checkpoints/best_model.pt"
-                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-                <p className="text-xs text-slate-400 mt-1">
-                  Path to the checkpoint file to resume training from
-                </p>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-sm font-medium text-slate-300 mb-2 block">
+                    Select Checkpoint
+                  </label>
+
+                  {!useCustomPath ? (
+                    <>
+                      <select
+                        value={node.data.checkpoint_path || ''}
+                        onChange={(e) => handleChange('checkpoint_path', e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        disabled={loadingCheckpoints}
+                      >
+                        <option value="">
+                          {loadingCheckpoints ? 'Loading checkpoints...' : 'Select a checkpoint...'}
+                        </option>
+                        {checkpoints.map((ckpt) => (
+                          <option key={ckpt.path} value={ckpt.path}>
+                            {ckpt.name} - {ckpt.type} (Step: {ckpt.step}, {ckpt.size_mb}MB)
+                          </option>
+                        ))}
+                      </select>
+                      <div className="flex items-center justify-between mt-2">
+                        <p className="text-xs text-slate-400">
+                          Available checkpoints from data/ folder
+                        </p>
+                        <button
+                          onClick={() => setUseCustomPath(true)}
+                          className="text-xs text-indigo-400 hover:text-indigo-300"
+                        >
+                          Enter custom path
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <input
+                        type="text"
+                        value={node.data.checkpoint_path || ''}
+                        onChange={(e) => handleChange('checkpoint_path', e.target.value)}
+                        placeholder="/app/data/checkpoints/best_model.pt"
+                        className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <div className="flex items-center justify-between mt-2">
+                        <p className="text-xs text-slate-400">
+                          Enter full path to checkpoint file
+                        </p>
+                        <button
+                          onClick={() => setUseCustomPath(false)}
+                          className="text-xs text-indigo-400 hover:text-indigo-300"
+                        >
+                          Select from list
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Show checkpoint info */}
+                {node.data.checkpoint_path && (
+                  <div className="border-t border-slate-600 pt-3 mt-3">
+                    {(() => {
+                      const selectedCheckpoint = checkpoints.find(
+                        (ckpt) => ckpt.path === node.data.checkpoint_path
+                      );
+                      if (selectedCheckpoint && typeof selectedCheckpoint.step === 'number') {
+                        return (
+                          <div className="bg-slate-700 p-3 rounded-lg">
+                            <p className="text-xs text-slate-300 mb-1">
+                              Checkpoint Status
+                            </p>
+                            <p className="text-sm text-white font-semibold">
+                              {selectedCheckpoint.step.toLocaleString()} steps already completed
+                            </p>
+                            <p className="text-xs text-slate-400 mt-1">
+                              {selectedCheckpoint.type} model • {selectedCheckpoint.size_mb}MB
+                            </p>
+                            <p className="text-xs text-amber-400 mt-2">
+                              💡 Max Steps in hyperparameters will be added to this checkpoint
+                            </p>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1272,16 +1375,58 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
               <label className="text-sm font-medium text-slate-300 mb-2 block">
                 Checkpoint Path
               </label>
-              <input
-                type="text"
-                value={node.data.checkpoint_path || 'checkpoints/best_model.pt'}
-                onChange={(e) => handleChange('checkpoint_path', e.target.value)}
-                placeholder="checkpoints/best_model.pt"
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <p className="text-xs text-slate-400 mt-1">
-                Path to the pretrained model checkpoint
-              </p>
+
+              {!useCustomPath ? (
+                <>
+                  <select
+                    value={node.data.checkpoint_path || ''}
+                    onChange={(e) => handleChange('checkpoint_path', e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled={loadingCheckpoints}
+                  >
+                    <option value="">
+                      {loadingCheckpoints ? 'Loading checkpoints...' : 'Select a checkpoint...'}
+                    </option>
+                    {checkpoints.map((ckpt) => (
+                      <option key={ckpt.path} value={ckpt.path}>
+                        {ckpt.name} - {ckpt.type} (Step: {ckpt.step}, {ckpt.size_mb}MB)
+                      </option>
+                    ))}
+                  </select>
+                  <div className="flex items-center justify-between mt-2">
+                    <p className="text-xs text-slate-400">
+                      Available checkpoints from data/ folder
+                    </p>
+                    <button
+                      onClick={() => setUseCustomPath(true)}
+                      className="text-xs text-blue-400 hover:text-blue-300"
+                    >
+                      Enter custom path
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    value={node.data.checkpoint_path || ''}
+                    onChange={(e) => handleChange('checkpoint_path', e.target.value)}
+                    placeholder="/app/data/checkpoints/best_model.pt"
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="flex items-center justify-between mt-2">
+                    <p className="text-xs text-slate-400">
+                      Enter full path to checkpoint file
+                    </p>
+                    <button
+                      onClick={() => setUseCustomPath(false)}
+                      className="text-xs text-blue-400 hover:text-blue-300"
+                    >
+                      Select from list
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         );

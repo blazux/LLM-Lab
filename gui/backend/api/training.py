@@ -1,6 +1,7 @@
 import asyncio
 import sys
 import threading
+import os
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -33,7 +34,10 @@ training_state = {
     "current_ppl": None,
     "current_lr": None,
     "status": "idle",
-    "error": None
+    "error": None,
+    "model_config": None,  # Store full model configuration
+    "training_config": None,  # Store full training configuration
+    "training_type": None  # "pretraining", "sft", or "rlhf"
 }
 
 # Queue for metrics updates
@@ -48,6 +52,7 @@ class TrainingRequest(BaseModel):
     training_cfg: Dict[str, Any]
     checkpoint_path: Optional[str] = None
     output_dir: str = "/app/data/checkpoints"
+    additional_steps: int = 0
 
 
 class RLHFRequest(BaseModel):
@@ -191,7 +196,8 @@ class MetricsCallback:
 
 
 def run_training(model_config_dict: Dict, train_config_dict: Dict,
-                 checkpoint_path: Optional[str] = None, output_dir: str = "/app/data/checkpoints"):
+                 checkpoint_path: Optional[str] = None, output_dir: str = "/app/data/checkpoints",
+                 additional_steps: int = 0):
     """Run training in a separate thread"""
     try:
         # Clear CUDA cache before starting to free memory from previous runs
@@ -204,6 +210,9 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
         training_state["is_training"] = True
         training_state["status"] = "starting"
         training_state["error"] = None
+        training_state["model_config"] = model_config_dict
+        training_state["training_config"] = train_config_dict
+        training_state["training_type"] = "pretraining"
 
         # Log received config for verification
         metrics_queue.put({
@@ -223,8 +232,27 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
         model_config = ModelConfig(**model_config_dict)
         train_config = TrainingConfig(**train_config_dict)
 
-        # Update max_steps in state
-        training_state["max_steps"] = train_config.max_steps
+        # Calculate actual target steps for progress tracking
+        start_step = 0
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            try:
+                checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+                start_step = checkpoint.get('step', 0)
+            except Exception as e:
+                print(f"Warning: Could not load checkpoint for step count: {e}")
+
+        # Update max_steps in state (this is the target step, not the count)
+        if additional_steps > 0:
+            # When using additional_steps, target is start_step + additional_steps
+            training_state["max_steps"] = start_step + additional_steps
+            metrics_queue.put({
+                "type": "log",
+                "level": "info",
+                "message": f"Resuming from step {start_step}, training {additional_steps} more steps to reach step {start_step + additional_steps}",
+                "timestamp": time.time()
+            })
+        else:
+            training_state["max_steps"] = train_config.max_steps
 
         # Log start
         metrics_queue.put({
@@ -245,6 +273,7 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
             train_config=train_config,
             checkpoint_path=checkpoint_path,
             output_dir=output_dir,
+            additional_steps=additional_steps,
             callback=callback
         )
 
@@ -295,6 +324,9 @@ def run_sft(sft_config_dict: Dict):
         training_state["is_training"] = True
         training_state["status"] = "starting"
         training_state["error"] = None
+        training_state["model_config"] = None  # SFT loads from checkpoint
+        training_state["training_config"] = sft_config_dict
+        training_state["training_type"] = "sft"
 
         # Log received config
         metrics_queue.put({
@@ -400,7 +432,8 @@ async def start_training(request: TrainingRequest):
             request.model_cfg,
             request.training_cfg,
             request.checkpoint_path,
-            request.output_dir
+            request.output_dir,
+            request.additional_steps
         ),
         daemon=True
     )
@@ -460,6 +493,9 @@ def run_rlhf(rlhf_config_dict: Dict):
         training_state["is_training"] = True
         training_state["status"] = "starting"
         training_state["error"] = None
+        training_state["model_config"] = None  # RLHF loads from checkpoint
+        training_state["training_config"] = rlhf_config_dict
+        training_state["training_type"] = "rlhf"
 
         # Log received config
         metrics_queue.put({
@@ -627,6 +663,9 @@ async def stream_metrics():
                 "current_lr": training_state["current_lr"],
                 "status": training_state["status"],
                 "error": training_state["error"],
+                "model_config": training_state["model_config"],
+                "training_config": training_state["training_config"],
+                "training_type": training_state["training_type"],
                 "timestamp": time.time()
             }
             yield {
@@ -634,19 +673,31 @@ async def stream_metrics():
                 "data": json.dumps(snapshot)
             }
 
-            # Clear old backlogged metrics from queue
-            # This prevents flooding the client with old metrics when reconnecting
+            # Clear only very old backlogged metrics from queue (older than 30 seconds)
+            # This keeps recent training logs while preventing flooding with stale data
+            current_time = time.time()
+            max_age = 30  # seconds
             cleared_count = 0
+            kept_metrics = []
+
             while not metrics_queue.empty():
                 try:
-                    metrics_queue.get_nowait()
-                    cleared_count += 1
+                    metric = metrics_queue.get_nowait()
+                    # Keep metrics from last 30 seconds
+                    if metric.get('timestamp', 0) > current_time - max_age:
+                        kept_metrics.append(metric)
+                    else:
+                        cleared_count += 1
                 except queue.Empty:
                     break
 
+            # Put kept metrics back in queue
+            for metric in kept_metrics:
+                metrics_queue.put(metric)
+
             # Log if we cleared metrics (useful for debugging)
             if cleared_count > 0:
-                print(f"SSE reconnect: Cleared {cleared_count} old metrics from queue")
+                print(f"SSE reconnect: Cleared {cleared_count} old metrics (>{max_age}s), kept {len(kept_metrics)} recent ones")
 
             # Now stream only new real-time metrics
             while True:

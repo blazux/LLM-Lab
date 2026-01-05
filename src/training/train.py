@@ -157,7 +157,7 @@ def train_model(
     model_config: ModelConfig,
     train_config: TrainingConfig,
     checkpoint_path: str = None,
-    output_dir: str = "outputs/pretraining",
+    output_dir: str = "/app/data/checkpoints",
     additional_steps: int = 0,
     load_optimizer_state: bool = True,
     callback: callable = None

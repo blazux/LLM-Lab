@@ -23,6 +23,9 @@ export interface TrainingMetric {
   current_loss?: number | null;
   current_ppl?: number | null;
   current_lr?: number | null;
+  model_config?: any;  // Full model configuration
+  training_config?: any;  // Full training configuration
+  training_type?: 'pretraining' | 'sft' | 'rlhf' | null;
 }
 
 export interface ModelConfigData {
@@ -126,7 +129,8 @@ export async function startTraining(
   modelConfig: ModelConfigData,
   trainingConfig: TrainingConfigData,
   checkpointPath?: string,
-  outputDir: string = 'checkpoints'
+  outputDir: string = '/app/data/checkpoints',
+  additionalSteps: number = 0
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/training/start`, {
     method: 'POST',
@@ -138,6 +142,7 @@ export async function startTraining(
       training_cfg: trainingConfig,
       checkpoint_path: checkpointPath,
       output_dir: outputDir,
+      additional_steps: additionalSteps,
     }),
   });
 
@@ -258,6 +263,24 @@ export async function getTrainingStatus(): Promise<any> {
     throw new Error('Failed to get training status');
   }
   return response.json();
+}
+
+export interface Checkpoint {
+  name: string;
+  path: string;
+  step: number | string;
+  type: string;
+  size_mb: number;
+  modified: number;
+}
+
+export async function getCheckpoints(): Promise<Checkpoint[]> {
+  const response = await fetch(`${API_BASE_URL}/inference/checkpoints`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch checkpoints');
+  }
+  const data = await response.json();
+  return data.checkpoints || [];
 }
 
 export function subscribeToMetrics(

@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Play, Pause, Square, Save, Terminal, TrendingDown, Zap, Clock, CheckCircle } from 'lucide-react';
+import { Play, Square, Terminal, TrendingDown, Zap, Clock, CheckCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useTraining, TrainingLog } from '../context/TrainingContext';
 import { subscribeToMetrics, TrainingMetric, stopTraining } from '../services/trainingApi';
 
 const TrainingMonitor = () => {
   const { trainingState, updateTrainingState, addMetric, updateMetricWithEval, addLog } = useTraining();
-  const { isTraining, isPaused, progress, currentStep, maxSteps, currentLoss, currentPPL, metrics, logs } = trainingState;
+  const { isTraining, progress, currentStep, maxSteps, currentLoss, currentPPL, metrics, logs } = trainingState;
 
   const [eta, setEta] = useState('--:--:--');
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -16,7 +16,7 @@ const TrainingMonitor = () => {
 
   // Subscribe to real-time metrics when training starts
   useEffect(() => {
-    if (isTraining && !isPaused) {
+    if (isTraining) {
       // Subscribe to metrics stream
       const unsubscribe = subscribeToMetrics(
         (metric: TrainingMetric) => {
@@ -82,19 +82,24 @@ const TrainingMonitor = () => {
               learningRate: metric.lr!,
               timestamp: metric.timestamp
             });
-          } else if (metric.type === 'eval_metrics' && metric.step !== undefined) {
+          } else if (metric.type === 'eval_metrics' && metric.step !== undefined && metric.eval_loss !== undefined && metric.eval_perplexity !== undefined) {
             // Update metrics with eval data
-            updateMetricWithEval(metric.step!, metric.eval_loss!, metric.eval_perplexity!);
+            console.log('Received eval_metrics:', metric.step, metric.eval_loss, metric.eval_perplexity);
+            updateMetricWithEval(metric.step, metric.eval_loss, metric.eval_perplexity);
           } else if (metric.type === 'log' && metric.message) {
             // Add log message
             addLog(metric.level as TrainingLog['level'], metric.message);
           } else if (metric.type === 'status') {
             // Training ended
             if (metric.status === 'completed') {
-              updateTrainingState({ isTraining: false, isPaused: false });
+              updateTrainingState({ isTraining: false });
+              // Clear saved canvas configurations
+              localStorage.removeItem('training_canvas_state');
             } else if (metric.status === 'error') {
-              updateTrainingState({ isTraining: false, isPaused: false });
+              updateTrainingState({ isTraining: false });
               addLog('error', metric.error || 'Training failed');
+              // Clear saved canvas configurations
+              localStorage.removeItem('training_canvas_state');
             }
           }
         },
@@ -118,13 +123,36 @@ const TrainingMonitor = () => {
       lastStepRef.current = 0;
       setEta('--:--:--');
     }
-  }, [isTraining, isPaused, maxSteps, updateTrainingState, addMetric, updateMetricWithEval, addLog]);
+  }, [isTraining, maxSteps, updateTrainingState, addMetric, updateMetricWithEval, addLog]);
 
-  const handlePause = () => {
-    // TODO: Implement pause/resume in backend
-    updateTrainingState({ isPaused: !isPaused });
-    addLog('warning', 'Pause/Resume not yet implemented - training will continue');
-  };
+  // Check for ongoing training session on mount
+  useEffect(() => {
+    const checkTrainingStatus = async () => {
+      try {
+        const response = await fetch('/api/training/status');
+        const status = await response.json();
+
+        // If training is active but frontend doesn't know, update state
+        if (status.is_training && !isTraining) {
+          console.log('Detected ongoing training session, reconnecting...');
+          updateTrainingState({
+            isTraining: true,
+            currentStep: status.current_step || 0,
+            maxSteps: status.max_steps || 0,
+            currentLoss: status.current_loss,
+            currentPPL: status.current_ppl,
+            currentLR: status.current_lr
+          });
+        }
+
+      } catch (error) {
+        console.error('Failed to check training status:', error);
+      }
+    };
+
+    checkTrainingStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);  // Run only on mount - updateTrainingState is stable via useCallback
 
   const handleStop = async () => {
     try {
@@ -133,10 +161,6 @@ const TrainingMonitor = () => {
     } catch (error) {
       addLog('error', `Failed to stop training: ${(error as Error).message}`);
     }
-  };
-
-  const handleSaveCheckpoint = () => {
-    addLog('success', `Checkpoint saved at step ${currentStep}`);
   };
 
   const getLogColor = (level: TrainingLog['level']) => {
@@ -175,31 +199,14 @@ const TrainingMonitor = () => {
                 No Training Active
               </div>
             ) : (
-              <>
-                <button
-                  onClick={handlePause}
-                  className="px-4 py-3 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg font-semibold flex items-center gap-2 transition-colors"
-                >
-                  <Pause className="w-5 h-5" />
-                  {isPaused ? 'Resume' : 'Pause'}
-                </button>
-                <button
-                  onClick={handleStop}
-                  className="px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold flex items-center gap-2 transition-colors"
-                >
-                  <Square className="w-5 h-5" />
-                  Stop
-                </button>
-              </>
+              <button
+                onClick={handleStop}
+                className="px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold flex items-center gap-2 transition-colors"
+              >
+                <Square className="w-5 h-5" />
+                Stop Training
+              </button>
             )}
-            <button
-              onClick={handleSaveCheckpoint}
-              disabled={!isTraining}
-              className="px-4 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-slate-700 disabled:cursor-not-allowed text-white rounded-lg font-semibold flex items-center gap-2 transition-colors"
-            >
-              <Save className="w-5 h-5" />
-              Save
-            </button>
           </div>
         </div>
 

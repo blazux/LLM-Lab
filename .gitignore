@@ -11,4 +11,5 @@ outputs/*
 gui/backend/cache/*
 gui/backend/checkpoints/*
 *.json
+data/*
 temp

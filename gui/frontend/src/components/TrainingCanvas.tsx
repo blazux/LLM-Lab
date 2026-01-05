@@ -176,6 +176,7 @@ const TrainingCanvas = ({
       }
 
       // Gather training config from nodes
+      const modelNode = nodes.find(n => n.type === 'model');
       const datasetNode = nodes.find(n => n.type === 'dataset');
       const optimizerNode = nodes.find(n => ['adamw', 'muon', 'lion', 'sophia'].includes(n.type || ''));
       const schedulerNode = nodes.find(n => ['cosine', 'linear', 'polynomial', 'constant'].includes(n.type || ''));
@@ -189,6 +190,9 @@ const TrainingCanvas = ({
         alert('Please add an Optimizer node to the training canvas');
         return;
       }
+
+      // Get checkpoint path if resuming
+      const checkpointPath = modelNode?.data?.resume_training ? modelNode.data.checkpoint_path : undefined;
 
       // Build training config
       const trainingConfig: TrainingConfigData = {
@@ -231,6 +235,15 @@ const TrainingCanvas = ({
       // Clear previous metrics and logs
       clearMetrics();
 
+      // Save canvas configurations to localStorage before starting
+      localStorage.setItem('training_canvas_state', JSON.stringify({
+        modelNodes,
+        modelEdges,
+        trainingNodes: nodes,
+        trainingEdges: edges,
+        timestamp: Date.now()
+      }));
+
       // Reset training state
       updateTrainingState({
         isTraining: true,
@@ -243,8 +256,12 @@ const TrainingCanvas = ({
         currentLR: null,
       });
 
+      // When resuming from checkpoint, max_steps becomes additional steps
+      // So checkpoint at step 10k + max_steps 10k = trains to 20k
+      const additionalSteps = checkpointPath ? trainingConfig.max_steps : 0;
+
       // Start training via API
-      await startTraining(modelConfig, trainingConfig);
+      await startTraining(modelConfig, trainingConfig, checkpointPath, '/app/data/checkpoints', additionalSteps);
 
       // Navigate to monitor
       onStartTraining();

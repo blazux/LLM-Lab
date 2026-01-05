@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 
 export interface TrainingMetrics {
   step: number;
@@ -61,21 +61,23 @@ export const TrainingProvider = ({ children }: { children: ReactNode }) => {
     ],
   });
 
-  const updateTrainingState = (updates: Partial<TrainingState>) => {
+  const updateTrainingState = useCallback((updates: Partial<TrainingState>) => {
     setTrainingState(prev => ({ ...prev, ...updates }));
-  };
+  }, []);
 
-  const addMetric = (metric: TrainingMetrics) => {
+  const addMetric = useCallback((metric: TrainingMetrics) => {
     setTrainingState(prev => ({
       ...prev,
       metrics: [...prev.metrics, metric]
     }));
-  };
+  }, []);
 
-  const updateMetricWithEval = (step: number, evalLoss: number, evalPerplexity: number) => {
+  const updateMetricWithEval = useCallback((step: number, evalLoss: number, evalPerplexity: number) => {
     setTrainingState(prev => {
       const existingIndex = prev.metrics.findIndex(m => m.step === step);
       if (existingIndex >= 0) {
+        // Update existing metric
+        console.log(`Updating existing metric at step ${step} with eval data`);
         const updated = [...prev.metrics];
         updated[existingIndex] = {
           ...updated[existingIndex],
@@ -83,12 +85,24 @@ export const TrainingProvider = ({ children }: { children: ReactNode }) => {
           evalPerplexity
         };
         return { ...prev, metrics: updated };
+      } else {
+        // Add new metric entry for eval-only step
+        console.log(`Creating new metric entry for eval at step ${step}`);
+        const newMetric: TrainingMetrics = {
+          step,
+          loss: NaN, // No training loss at this step
+          perplexity: NaN,
+          learningRate: NaN,
+          evalLoss,
+          evalPerplexity,
+          timestamp: Date.now()
+        };
+        return { ...prev, metrics: [...prev.metrics, newMetric] };
       }
-      return prev;
     });
-  };
+  }, []);
 
-  const addLog = (level: TrainingLog['level'], message: string) => {
+  const addLog = useCallback((level: TrainingLog['level'], message: string) => {
     setTrainingState(prev => ({
       ...prev,
       logs: [...prev.logs, {
@@ -97,9 +111,9 @@ export const TrainingProvider = ({ children }: { children: ReactNode }) => {
         message
       }].slice(-100) // Keep last 100 logs
     }));
-  };
+  }, []);
 
-  const clearMetrics = () => {
+  const clearMetrics = useCallback(() => {
     setTrainingState(prev => ({
       ...prev,
       metrics: [],
@@ -111,7 +125,7 @@ export const TrainingProvider = ({ children }: { children: ReactNode }) => {
         }
       ]
     }));
-  };
+  }, []);
 
   return (
     <TrainingContext.Provider value={{

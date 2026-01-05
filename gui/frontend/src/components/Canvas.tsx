@@ -314,6 +314,46 @@ const Canvas = () => {
     return params.toString();
   };
 
+  // Check for saved canvas configurations on mount
+  useEffect(() => {
+    const restoreCanvasState = async () => {
+      try {
+        // Check if training is active
+        const response = await fetch('/api/training/status');
+        const status = await response.json();
+
+        if (status.is_training) {
+          // Try to restore canvas state from localStorage
+          const savedCanvasState = localStorage.getItem('training_canvas_state');
+          if (savedCanvasState) {
+            const canvasState = JSON.parse(savedCanvasState);
+            console.log('Restoring canvas configurations from localStorage');
+
+            // Restore model architecture canvas
+            if (canvasState.modelNodes && canvasState.modelEdges) {
+              setNodes(canvasState.modelNodes);
+              setEdges(canvasState.modelEdges);
+            }
+
+            // Restore training configuration canvas
+            if (canvasState.trainingNodes && canvasState.trainingEdges) {
+              setTrainingNodes(canvasState.trainingNodes);
+              setTrainingEdges(canvasState.trainingEdges);
+              setTrainingKey(prev => prev + 1); // Force re-render
+            }
+          }
+        } else {
+          // Training not active, clear saved state
+          localStorage.removeItem('training_canvas_state');
+        }
+      } catch (error) {
+        console.error('Failed to restore canvas state:', error);
+      }
+    };
+
+    restoreCanvasState();
+  }, [setNodes, setEdges]);
+
   // Auto-sync vocab_size from embedding to lmhead
   useEffect(() => {
     const embeddingNode = nodes.find(n => n.type === 'embedding');
