@@ -51,6 +51,7 @@ import GeGLUNode from './nodes/GeGLUNode';
 import ReGLUNode from './nodes/ReGLUNode';
 import GELUNode from './nodes/GELUNode';
 import ReLUNode from './nodes/ReLUNode';
+import MoERouterNode from './nodes/MoERouterNode';
 // Mamba2 nodes
 import SSMCoreNode from './nodes/SSMCoreNode';
 import TemporalConvNode from './nodes/TemporalConvNode';
@@ -83,6 +84,7 @@ const nodeTypes = {
   geglu: GeGLUNode,
   reglu: ReGLUNode,
   gelu: GELUNode,
+  moe_router: MoERouterNode,
   relu: ReLUNode,
   // Mamba2 components
   ssmcore: SSMCoreNode,
@@ -262,7 +264,7 @@ const Canvas = () => {
     } else {
       // Transformer parameter calculation
       const attentionNode = nodes.find(n => ['mha', 'gqa', 'mqa', 'mla'].includes(n.type || ''));
-      const ffnNode = nodes.find(n => ['swiglu', 'gelu', 'relu'].includes(n.type || ''));
+      const ffnNode = nodes.find(n => ['swiglu', 'geglu', 'reglu', 'gelu', 'relu'].includes(n.type || ''));
       const d_ff = ffnNode?.data.d_ff || (d_model * 4);
       const attention_type = attentionNode?.type || 'gqa';
 
@@ -289,11 +291,22 @@ const Canvas = () => {
         attn_params = d_model * d_model + 2 * n_kv_heads * d_k * d_model + d_model * d_model;
       }
 
-      // Per-layer FFN
+      // Per-layer FFN (with MoE support)
       const activation = ffnNode?.type || 'swiglu';
-      const ff_params = activation === 'swiglu'
+      const single_ffn_params = ['swiglu', 'geglu', 'reglu'].includes(activation)
         ? 3 * d_model * d_ff
         : 2 * d_model * d_ff;
+
+      // Check for MoE router
+      const moeNode = nodes.find(n => n.type === 'moe_router');
+      let ff_params: number;
+      if (moeNode) {
+        const num_experts = moeNode.data.num_experts || 8;
+        const router_params = d_model * num_experts;
+        ff_params = single_ffn_params * num_experts + router_params;
+      } else {
+        ff_params = single_ffn_params;
+      }
 
       // Per-layer normalization (2 per layer: pre-attn and pre-ffn)
       const norm_params = 4 * d_model;
@@ -668,6 +681,8 @@ const Canvas = () => {
                         return '#ef4444'; // red
                       case 'relu':
                         return '#ec4899'; // pink
+                      case 'moe_router':
+                        return '#a855f7'; // purple
                       default:
                         return '#64748b'; // slate
                     }

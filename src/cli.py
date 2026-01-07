@@ -158,9 +158,17 @@ def configure_model():
 
     # Common parameters
     print_subsection("Model Parameters", "🔢")
+
+    print(f"  {Colors.DIM}→ HF config: hidden_size{Colors.RESET}")
     config.d_model = get_input("Embedding size (d_model)", default=config.d_model, type_fn=int)
+
+    print(f"  {Colors.DIM}→ HF config: num_hidden_layers{Colors.RESET}")
     config.n_layers = get_input("Number of layers", default=config.n_layers, type_fn=int)
+
+    print(f"  {Colors.DIM}→ HF config: max_position_embeddings{Colors.RESET}")
     config.max_seq_len = get_input("Maximum sequence length", default=config.max_seq_len, type_fn=int)
+
+    print(f"  {Colors.DIM}→ HF config: dropout{Colors.RESET}")
     config.dropout = get_input("Dropout rate", default=config.dropout, type_fn=float)
 
     print(f"\n  {Colors.DIM}Normalization options: {Colors.BOLD}layernorm, rmsnorm{Colors.RESET}")
@@ -169,11 +177,15 @@ def configure_model():
         default=config.norm_type
     )
 
+    print(f"  {Colors.DIM}→ HF config: layer_norm_epsilon or rms_norm_eps{Colors.RESET}")
+    config.norm_eps = get_input("Normalization epsilon", default=config.norm_eps, type_fn=float)
+
     if config.model_architecture == "transformer":
         # Transformer-specific configuration
         print_subsection("Transformer Architecture", "🔀")
 
         print(f"\n  {Colors.DIM}Positional Encoding options: {Colors.BOLD}{', '.join(POSITIONAL_ENCODINGS.keys())}{Colors.RESET}")
+        print(f"  {Colors.DIM}→ HF config: position_embedding_type{Colors.RESET}")
         config.positional_encoding = get_input(
             "Positional encoding",
             default=config.positional_encoding
@@ -185,22 +197,27 @@ def configure_model():
             default=config.attention_type
         )
 
+        print(f"  {Colors.DIM}→ HF config: num_attention_heads{Colors.RESET}")
         config.n_heads = get_input("Number of attention heads", default=config.n_heads, type_fn=int)
 
         if config.attention_type == "gqa":
+            print(f"  {Colors.DIM}→ HF config: num_key_value_heads{Colors.RESET}")
             config.n_kv_heads = get_input("Number of KV heads (for GQA)", default=config.n_kv_heads, type_fn=int)
 
         print(f"\n  {Colors.DIM}Activation options: {Colors.BOLD}{', '.join(ACTIVATION_TYPES.keys())}{Colors.RESET}")
+        print(f"  {Colors.DIM}→ HF config: hidden_act{Colors.RESET}")
         config.activation = get_input(
             "Feed-forward activation",
             default=config.activation
         )
 
+        print(f"  {Colors.DIM}→ HF config: intermediate_size{Colors.RESET}")
         config.d_ff = get_input("Feed-forward hidden size (d_ff)", default=config.d_ff, type_fn=int)
 
         # Sliding window attention (optional)
         print(f"\n  {Colors.DIM}Sliding window attention limits each token's attention to nearby tokens{Colors.RESET}")
         print(f"  {Colors.DIM}Default (None) = full attention. Example: 2048 for local attention{Colors.RESET}")
+        print(f"  {Colors.DIM}→ HF config: sliding_window{Colors.RESET}")
         sw_input = get_input(
             "Sliding window size (or 'none' for full attention)",
             default="none" if config.sliding_window is None else str(config.sliding_window)
@@ -209,6 +226,82 @@ def configure_model():
             config.sliding_window = None
         else:
             config.sliding_window = int(sw_input)
+
+        # Attention bias (optional)
+        print(f"\n  {Colors.DIM}→ HF config: attention_bias (typically False for modern LLMs){Colors.RESET}")
+        bias_input = get_input(
+            "Use bias in attention projections? (y/n)",
+            default="n" if not config.attention_bias else "y"
+        )
+        config.attention_bias = bias_input.lower() in ['y', 'yes', 'true']
+
+        # Mixture of Experts (optional)
+        print_subsection("Mixture of Experts (Optional)", "🎯")
+
+        print(f"\n  {Colors.CYAN}ℹ{Colors.RESET}  MoE replaces standard FFN with multiple expert FFNs + router")
+        print(f"     {Colors.DIM}Each token is routed to top-K experts based on learned routing{Colors.RESET}")
+        print(f"     {Colors.DIM}Increases model capacity while keeping inference cost similar{Colors.RESET}")
+        print(f"     {Colors.DIM}Used in: Mixtral-8x7B, DeepSeek-V2, Switch Transformer{Colors.RESET}")
+        print()
+
+        moe_input = get_input(
+            "Enable MoE (Mixture of Experts)? (y/n)",
+            default="n" if not config.use_moe else "y"
+        )
+        config.use_moe = moe_input.lower() in ['y', 'yes', 'true']
+
+        if config.use_moe:
+            print(f"\n  {Colors.DIM}Number of expert FFNs per layer (typical: 8 for Mixtral, 64 for DeepSeek){Colors.RESET}")
+            print(f"  {Colors.DIM}→ HF config: num_experts{Colors.RESET}")
+            config.num_experts = get_input(
+                "Number of experts",
+                default=config.num_experts if config.num_experts else 8,
+                type_fn=int
+            )
+
+            print(f"\n  {Colors.DIM}How many experts process each token (typical: 2){Colors.RESET}")
+            print(f"  {Colors.DIM}→ HF config: num_experts_per_token{Colors.RESET}")
+            config.num_experts_per_token = get_input(
+                "Experts per token (top-K)",
+                default=config.num_experts_per_token if config.num_experts_per_token else 2,
+                type_fn=int
+            )
+
+            print(f"\n  {Colors.DIM}Load balancing loss encourages even expert utilization{Colors.RESET}")
+            print(f"  {Colors.DIM}→ HF config: load_balancing_loss_weight{Colors.RESET}")
+            config.load_balancing_loss_weight = get_input(
+                "Load balancing loss weight",
+                default=config.load_balancing_loss_weight,
+                type_fn=float
+            )
+
+            print(f"\n  {Colors.DIM}Router z-loss prevents overconfident routing (optional){Colors.RESET}")
+            print(f"  {Colors.DIM}→ HF config: router_z_loss_weight{Colors.RESET}")
+            config.router_z_loss_weight = get_input(
+                "Router z-loss weight",
+                default=config.router_z_loss_weight,
+                type_fn=float
+            )
+
+            print(f"\n  {Colors.DIM}Optionally specify which layers use MoE (e.g., '0,2,4,6' or 'all'){Colors.RESET}")
+            print(f"  {Colors.DIM}Default: all layers use MoE{Colors.RESET}")
+            print(f"  {Colors.DIM}→ HF config: moe_layers{Colors.RESET}")
+            moe_layers_input = get_input(
+                "MoE layers (comma-separated indices or 'all')",
+                default="all"
+            )
+            if moe_layers_input.lower() in ['all', 'none', '']:
+                config.moe_layers = None  # All layers use MoE
+            else:
+                # Parse comma-separated layer indices
+                config.moe_layers = [int(x.strip()) for x in moe_layers_input.split(',')]
+
+            # Show MoE configuration summary
+            moe_layer_count = len(config.moe_layers) if config.moe_layers else config.n_layers
+            print(f"\n  {Colors.GREEN}✓{Colors.RESET} MoE Configuration:")
+            print(f"     {Colors.BOLD}{config.num_experts}{Colors.RESET} experts per layer, top-{Colors.BOLD}{config.num_experts_per_token}{Colors.RESET} routing")
+            print(f"     {Colors.BOLD}{moe_layer_count}/{config.n_layers}{Colors.RESET} layers using MoE")
+            print(f"     Expert type: {Colors.BOLD}{config.activation}{Colors.RESET} with d_ff={Colors.BOLD}{config.d_ff}{Colors.RESET}")
 
     elif config.model_architecture == "mamba2":
         # Mamba2-specific configuration
@@ -272,9 +365,9 @@ def configure_model():
 
     # Suggest appropriate default filename based on architecture
     if config.model_architecture == "mamba2":
-        default_save_path = "model_config_mamba2.json"
+        default_save_path = "/app/data/model_config_mamba2.json"
     else:
-        default_save_path = "model_config.json"
+        default_save_path = "/app/data/model_config.json"
 
     save_path = get_input("Save config to", default=default_save_path)
 
@@ -291,11 +384,15 @@ def configure_model():
 
     # Show parameter count
     param_count = config.count_params()
+    import os
+    hf_config_path = os.path.join(os.path.dirname(save_path) or ".", "config.json")
+
     print(f"\n{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.GREEN}✓ {config.model_architecture.capitalize()} model configured successfully!{Colors.RESET}")
     print(f"  {Colors.WHITE}Architecture:{Colors.RESET} {Colors.BOLD}{Colors.CYAN}{config.model_architecture}{Colors.RESET}")
     print(f"  {Colors.WHITE}Estimated parameters:{Colors.RESET} {Colors.BOLD}{Colors.CYAN}{param_count:,}{Colors.RESET}")
     print(f"  {Colors.WHITE}Config saved to:{Colors.RESET} {Colors.CYAN}{save_path}{Colors.RESET}")
+    print(f"  {Colors.WHITE}HuggingFace config:{Colors.RESET} {Colors.CYAN}{hf_config_path}{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
 
     if config.model_architecture == "mamba2":
@@ -310,7 +407,7 @@ def configure_training():
 
     # Load model config
     print_subsection("Model Configuration", "📖")
-    model_config_path = get_input("Model config path", default="model_config.json")
+    model_config_path = get_input("Model config path", default="/app/data/model_config.json")
 
     if not os.path.exists(model_config_path):
         print_error(f"Model config not found: {model_config_path}")
@@ -411,7 +508,7 @@ def configure_training():
 
     # Save config
     print_subsection("Save Configuration", "💾")
-    save_path = get_input("Save training config to", default="training_config.json")
+    save_path = get_input("Save training config to", default="/app/data/training_config.json")
     train_config.save(save_path)
 
     print_success(f"Training configuration saved to: {save_path}")
@@ -434,7 +531,7 @@ def start_training():
         if model_config is None:
             return
     else:
-        train_config_path = get_input("Training config path", default="training_config.json")
+        train_config_path = get_input("Training config path", default="/app/data/training_config.json")
         if not os.path.exists(train_config_path):
             print_error(f"Training config not found: {train_config_path}")
             return
@@ -453,7 +550,7 @@ def start_training():
     load_optimizer_state = True
     resume = get_input("\nResume from checkpoint? [y/n]", default="n")
     if resume.lower() in ['y', 'yes']:
-        checkpoint_path = get_input("Checkpoint path", default="data/checkpoints/best_model.pt")
+        checkpoint_path = get_input("Checkpoint path", default="/app/data/best_model.pt")
         if not os.path.exists(checkpoint_path):
             print(f"⚠️  Checkpoint not found: {checkpoint_path}")
             checkpoint_path = None
@@ -487,7 +584,7 @@ def start_training():
                 checkpoint_path = None
 
     # Output directory
-    output_dir = get_input("\nOutput directory", default="data/checkpoints")
+    output_dir = get_input("\nOutput directory", default="/app/data")
 
     # Confirm and start
     print(f"\n{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
@@ -709,7 +806,7 @@ def configure_sft():
         print("Using default dataset: HuggingFaceTB/smoltalk2 (SFT, everyday conversations)")
 
     # Save config
-    save_path = get_input("\n💾 Save SFT config to", default="sft_config.json")
+    save_path = get_input("\n💾 Save SFT config to", default="/app/data/sft_config.json")
     config.save(save_path)
 
     print(f"\n✅ SFT configuration saved to: {save_path}")
@@ -733,7 +830,7 @@ def start_sft_training():
         if config is None:
             return
     else:
-        config_path = get_input("SFT config path", default="sft_config.json")
+        config_path = get_input("SFT config path", default="/app/data/sft_config.json")
         if not os.path.exists(config_path):
             print(f"❌ SFT config not found: {config_path}")
             return
@@ -795,7 +892,7 @@ def merge_lora_adapters():
     try:
         if input_type == "2":
             # Load from adapter folder (new method)
-            adapter_path = get_input("LoRA adapter folder path", default="data/sft_checkpoints/best_lora_adapters")
+            adapter_path = get_input("LoRA adapter folder path", default="/app/data/best_lora_adapters")
 
             if not os.path.exists(adapter_path):
                 print(f"❌ Adapter folder not found: {adapter_path}")
@@ -808,7 +905,7 @@ def merge_lora_adapters():
                 return
 
             # Get base model checkpoint
-            base_checkpoint_path = get_input("Base model checkpoint path", default="data/checkpoints/best_model.pt")
+            base_checkpoint_path = get_input("Base model checkpoint path", default="/app/data/best_model.pt")
 
             if not os.path.exists(base_checkpoint_path):
                 print(f"❌ Base checkpoint not found: {base_checkpoint_path}")
@@ -867,7 +964,7 @@ def merge_lora_adapters():
             return
 
         # Original method: Load from full checkpoint
-        checkpoint_path = get_input("LoRA checkpoint path", default="data/sft_checkpoints/best_model.pt")
+        checkpoint_path = get_input("LoRA checkpoint path", default="/app/data/best_model.pt")
 
         if not os.path.exists(checkpoint_path):
             print(f"❌ Checkpoint not found: {checkpoint_path}")
@@ -1013,7 +1110,7 @@ def start_inference():
     """Start inference mode"""
     print_section_header("Interactive Inference Mode", "💬")
 
-    checkpoint_path = get_input("Checkpoint path", default="data/checkpoints/best_model.pt")
+    checkpoint_path = get_input("Checkpoint path", default="/app/data/best_model.pt")
 
     if not os.path.exists(checkpoint_path):
         print_error(f"Checkpoint not found: {checkpoint_path}")
@@ -1231,7 +1328,7 @@ def configure_rlhf():
         print("Using default dataset: Anthropic/hh-rlhf")
 
     # Save config
-    save_path = get_input("\n💾 Save RLHF config to", default="rlhf_config.json")
+    save_path = get_input("\n💾 Save RLHF config to", default="/app/data/rlhf_config.json")
     config.save(save_path)
 
     print(f"\n✅ RLHF configuration saved to: {save_path}")
@@ -1255,7 +1352,7 @@ def start_rlhf_training():
         if config is None:
             return
     else:
-        config_path = get_input("RLHF config path", default="rlhf_config.json")
+        config_path = get_input("RLHF config path", default="/app/data/rlhf_config.json")
         if not os.path.exists(config_path):
             print(f"❌ RLHF config not found: {config_path}")
             return

@@ -483,6 +483,84 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
           </div>
         );
 
+      case 'moe_router':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Number of Experts
+              </label>
+              <input
+                type="number"
+                min="2"
+                max="64"
+                value={node.data.num_experts || 8}
+                onChange={(e) => handleChange('num_experts', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Total number of expert FFNs (typically 8 for Mixtral, 64 for DeepSeek)
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Experts per Token (Top-K)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="8"
+                value={node.data.num_experts_per_token || 2}
+                onChange={(e) => handleChange('num_experts_per_token', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                How many experts process each token (typically 2)
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Load Balancing Loss Weight
+              </label>
+              <input
+                type="number"
+                step="0.001"
+                min="0"
+                max="1"
+                value={node.data.load_balancing_loss_weight || 0.01}
+                onChange={(e) => handleChange('load_balancing_loss_weight', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Auxiliary loss weight to encourage even expert utilization (default: 0.01)
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Router Z-Loss Weight
+              </label>
+              <input
+                type="number"
+                step="0.0001"
+                min="0"
+                max="0.1"
+                value={node.data.router_z_loss_weight || 0.001}
+                onChange={(e) => handleChange('router_z_loss_weight', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Prevents overconfident routing for stability (default: 0.001)
+              </p>
+            </div>
+            <div className="p-3 bg-purple-900/20 border border-purple-500/30 rounded-md">
+              <p className="text-xs text-purple-300">
+                💡 Connect an FFN node below to define the expert architecture.
+                The router will create {node.data.num_experts || 8} copies with learned routing.
+              </p>
+            </div>
+          </div>
+        );
+
       case 'lmhead':
         return (
           <div className="space-y-4">

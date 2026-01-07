@@ -45,13 +45,16 @@ def evaluate_sft_model(model: nn.Module, val_loader: DataLoader, max_eval_steps:
             x, y = x.to(device), y.to(device)
 
             with autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = model(x)
+                logits, aux_loss = model(x)
                 # Ignore padding tokens (-100) in loss
                 loss = F.cross_entropy(
                     logits.view(-1, model.config.vocab_size),
                     y.view(-1),
                     ignore_index=-100
                 )
+                # Add MoE auxiliary loss if present
+                if aux_loss is not None:
+                    loss = loss + aux_loss
 
             # Count only non-padding tokens
             valid_tokens = (y != -100).sum().item()
@@ -375,13 +378,16 @@ def train_sft(config: SFTConfig, callback=None):
 
         # Forward pass with bfloat16
         with autocast(device_type="cuda", dtype=torch.bfloat16):
-            logits = model(x, use_checkpoint=True)
+            logits, aux_loss = model(x, use_checkpoint=True)
             # Ignore padding tokens (-100) in loss
             loss = F.cross_entropy(
                 logits.view(-1, model.config.vocab_size),
                 y.view(-1),
                 ignore_index=-100
             )
+            # Add MoE auxiliary loss if present
+            if aux_loss is not None:
+                loss = loss + aux_loss
             loss = loss / config.gradient_accumulation_steps
 
         scaler.scale(loss).backward()

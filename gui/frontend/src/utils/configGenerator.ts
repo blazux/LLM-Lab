@@ -21,6 +21,13 @@ interface ModelConfig {
   // MLA-specific
   d_latent?: number | null;
   d_rope_latent?: number | null;
+  // MoE-specific
+  use_moe?: boolean;
+  num_experts?: number;
+  num_experts_per_token?: number;
+  load_balancing_loss_weight?: number;
+  router_z_loss_weight?: number;
+  moe_layers?: number[] | null;
   // Mamba2-specific
   state_size?: number;
   expand_factor?: number;
@@ -161,6 +168,34 @@ export const generateConfigFromNodes = (
       case 'relu':
         config.activation = 'relu';
         config.d_ff = node.data.d_ff || 3584;
+        break;
+
+      case 'moe_router':
+        config.use_moe = true;
+        config.num_experts = node.data.num_experts || 8;
+        config.num_experts_per_token = node.data.num_experts_per_token || 2;
+        config.load_balancing_loss_weight = node.data.load_balancing_loss_weight || 0.01;
+        config.router_z_loss_weight = node.data.router_z_loss_weight || 0.001;
+
+        // Find connected FFN node to determine activation type and d_ff
+        const connectedFFN = edges.find(edge => edge.source === node.id);
+        if (connectedFFN) {
+          const ffnNode = nodes.find(n => n.id === connectedFFN.target);
+          if (ffnNode) {
+            // Map FFN node type to activation
+            const activationMap: { [key: string]: string } = {
+              'swiglu': 'swiglu',
+              'geglu': 'geglu',
+              'reglu': 'reglu',
+              'gelu': 'gelu',
+              'relu': 'relu'
+            };
+            if (ffnNode.type && activationMap[ffnNode.type]) {
+              config.activation = activationMap[ffnNode.type];
+              config.d_ff = ffnNode.data.d_ff || 3584;
+            }
+          }
+        }
         break;
 
       // Mamba2 nodes

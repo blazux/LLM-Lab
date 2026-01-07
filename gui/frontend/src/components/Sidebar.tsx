@@ -161,6 +161,13 @@ const MODEL_BLOCKS = [
         color: 'from-pink-500 to-pink-700',
         description: 'Classic activation'
       },
+      {
+        id: 'moe_router',
+        label: 'MoE Router',
+        emoji: '🎯',
+        color: 'from-purple-500 to-purple-700',
+        description: 'Mixture of Experts routing'
+      },
     ]
   },
   {

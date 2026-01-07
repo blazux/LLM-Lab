@@ -48,18 +48,11 @@ async def list_checkpoints():
     """List available checkpoints"""
     backend_dir = Path(__file__).parent.parent
 
-    # Check multiple checkpoint directories under /app/data/
-    checkpoint_dirs = [
-        Path("/app/data/checkpoints"),
-        Path("/app/data/sft_checkpoints"),
-        Path("/app/data/rlhf_checkpoints")
-    ]
+    # Check /app/data for all checkpoints
+    checkpoints_dir = Path("/app/data")
 
     checkpoints = []
-    for checkpoints_dir in checkpoint_dirs:
-        if not checkpoints_dir.exists():
-            continue
-
+    if checkpoints_dir.exists():
         for ckpt_file in checkpoints_dir.glob("*.pt"):
             # Get file stats
             stat = ckpt_file.stat()

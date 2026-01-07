@@ -12,15 +12,17 @@ from .bricks import (
     SwiGLU,
     GeGLU,
     ReGLU,
-    StandardFFN
+    StandardFFN,
+    MoEFFN
 )
 
 
 class TransformerBlock(nn.Module):
     """Single transformer block with pre-normalization"""
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: ModelConfig, layer_idx: int = 0):
         super().__init__()
         self.config = config
+        self.layer_idx = layer_idx
 
         # Get norm class
         NormClass = NORM_TYPES[config.norm_type]
@@ -29,15 +31,26 @@ class TransformerBlock(nn.Module):
         AttentionClass = ATTENTION_TYPES[config.attention_type]
         self.attention = AttentionClass(config)
 
-        # Feed-forward
-        if config.activation == 'swiglu':
-            self.feed_forward = SwiGLU(config.d_model, config.d_ff, config.dropout)
-        elif config.activation == 'geglu':
-            self.feed_forward = GeGLU(config.d_model, config.d_ff, config.dropout)
-        elif config.activation == 'reglu':
-            self.feed_forward = ReGLU(config.d_model, config.d_ff, config.dropout)
+        # Feed-forward: Check if this layer should use MoE
+        use_moe_this_layer = config.use_moe and (
+            config.moe_layers is None or layer_idx in config.moe_layers
+        )
+
+        if use_moe_this_layer:
+            # Use Mixture of Experts
+            self.feed_forward = MoEFFN(config)
+            self.is_moe = True
         else:
-            self.feed_forward = StandardFFN(config.d_model, config.d_ff, config.activation, config.dropout)
+            # Use standard FFN
+            if config.activation == 'swiglu':
+                self.feed_forward = SwiGLU(config.d_model, config.d_ff, config.dropout)
+            elif config.activation == 'geglu':
+                self.feed_forward = GeGLU(config.d_model, config.d_ff, config.dropout)
+            elif config.activation == 'reglu':
+                self.feed_forward = ReGLU(config.d_model, config.d_ff, config.dropout)
+            else:
+                self.feed_forward = StandardFFN(config.d_model, config.d_ff, config.activation, config.dropout)
+            self.is_moe = False
 
         # Normalization
         self.norm1 = NormClass(config.d_model, eps=config.norm_eps)
@@ -50,9 +63,16 @@ class TransformerBlock(nn.Module):
         # Pre-norm architecture
         attn_out = self.attention(self.norm1(x))
         x = x + self.dropout(attn_out)
-        ff_out = self.feed_forward(self.norm2(x))
-        x = x + self.dropout(ff_out)
-        return x
+
+        # Feed-forward (handle MoE aux loss)
+        if self.is_moe:
+            ff_out, aux_loss = self.feed_forward(self.norm2(x))
+            x = x + self.dropout(ff_out)
+            return x, aux_loss
+        else:
+            ff_out = self.feed_forward(self.norm2(x))
+            x = x + self.dropout(ff_out)
+            return x, None
 
 
 class TransformerLLM(nn.Module):
@@ -81,9 +101,9 @@ class TransformerLLM(nn.Module):
             self.pos_encoding = None
             self.position_dropout = nn.Dropout(config.dropout)
 
-        # Transformer blocks
+        # Transformer blocks (pass layer_idx for MoE layer selection)
         self.transformer_blocks = nn.ModuleList([
-            TransformerBlock(config) for _ in range(config.n_layers)
+            TransformerBlock(config, layer_idx=i) for i in range(config.n_layers)
         ])
 
         # Set positional encoding for attention layers
@@ -136,6 +156,10 @@ class TransformerLLM(nn.Module):
             x: input token ids (batch, seq_len) - for backward compatibility
             input_ids: input token ids (batch, seq_len) - for PEFT compatibility
             use_checkpoint: whether to use gradient checkpointing
+
+        Returns:
+            logits: (batch, seq_len, vocab_size)
+            aux_loss: MoE auxiliary loss (or None if no MoE layers)
         """
         # Handle both calling conventions (x for legacy, input_ids for PEFT)
         if input_ids is not None:
@@ -151,19 +175,28 @@ class TransformerLLM(nn.Module):
             x = self.pos_encoding(x)
         x = self.position_dropout(x)
 
-        # Transformer blocks
+        # Transformer blocks (accumulate MoE aux loss)
+        total_aux_loss = None
         for block in self.transformer_blocks:
             if use_checkpoint and self.training:
-                x = checkpoint(block, x, use_reentrant=False)
+                # Note: gradient checkpointing with MoE returns both x and aux_loss
+                x, aux_loss = checkpoint(block, x, use_reentrant=False)
             else:
-                x = block(x)
+                x, aux_loss = block(x)
+
+            # Accumulate aux loss from MoE layers
+            if aux_loss is not None:
+                if total_aux_loss is None:
+                    total_aux_loss = aux_loss
+                else:
+                    total_aux_loss = total_aux_loss + aux_loss
 
         # Final normalization and output
         x = self.norm(x)
         x = self.output_dropout(x)
         logits = self.lm_head(x)
 
-        return logits
+        return logits, total_aux_loss
 
     def count_parameters(self):
         """Count total trainable parameters"""

@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Optional, List
 
 
 @dataclass
@@ -33,6 +33,14 @@ class ModelConfig:
     # MLA-specific parameters (Multi-Head Latent Attention)
     d_latent: Optional[int] = None  # Latent dimension for KV compression (e.g., d_model // 4)
     d_rope_latent: Optional[int] = None  # Separate latent dim for RoPE (optional)
+
+    # MoE parameters (Mixture of Experts - optional for Transformer)
+    use_moe: bool = False  # Enable MoE in transformer feed-forward layers
+    num_experts: Optional[int] = 8  # Number of expert FFNs per layer
+    num_experts_per_token: Optional[int] = 2  # Top-K routing (how many experts process each token)
+    load_balancing_loss_weight: float = 0.01  # Weight for load balancing auxiliary loss
+    router_z_loss_weight: float = 0.001  # Weight for router z-loss (prevents overconfident routing)
+    moe_layers: Optional[List[int]] = None  # Which layers use MoE (None = all layers, or list like [0, 2, 4, 6])
 
     # Mamba2-specific parameters (optional for Transformer)
     state_size: int = 64  # SSM state dimension (d_state) - 16=minimal, 64=balanced, 128=optimal
@@ -71,6 +79,17 @@ class ModelConfig:
                 # Set default RoPE latent dimension (typically same as d_k)
                 if self.d_rope_latent is None:
                     self.d_rope_latent = self.d_k
+
+            # MoE-specific validation
+            if self.use_moe:
+                assert self.num_experts is not None and self.num_experts > 1, "num_experts must be > 1 for MoE"
+                assert self.num_experts_per_token is not None and self.num_experts_per_token > 0, "num_experts_per_token must be > 0"
+                assert self.num_experts_per_token <= self.num_experts, "num_experts_per_token must be <= num_experts"
+                assert self.d_ff is not None, "d_ff required for MoE"
+                # Validate moe_layers if specified
+                if self.moe_layers is not None:
+                    assert all(0 <= layer < self.n_layers for layer in self.moe_layers), \
+                        f"moe_layers must be in range [0, {self.n_layers-1}]"
 
         elif self.model_architecture == "mamba2":
             # Mamba2-specific validation
@@ -118,11 +137,18 @@ class ModelConfig:
             else:  # gqa
                 attn_params = self.d_model * self.d_model + 2 * self.n_kv_heads * self.d_k * self.d_model + self.d_model * self.d_model
 
-            # Feed-forward
-            if self.activation == "swiglu":
-                ff_params = 3 * self.d_model * self.d_ff
+            # Feed-forward (with MoE support)
+            if self.activation in ["swiglu", "geglu", "reglu"]:
+                single_ffn_params = 3 * self.d_model * self.d_ff
             else:
-                ff_params = 2 * self.d_model * self.d_ff
+                single_ffn_params = 2 * self.d_model * self.d_ff
+
+            # MoE: multiply by num_experts and add router
+            if self.use_moe:
+                router_params = self.d_model * self.num_experts
+                ff_params = single_ffn_params * self.num_experts + router_params
+            else:
+                ff_params = single_ffn_params
 
             # Normalization (2 per layer)
             norm_params = 4 * self.d_model
@@ -171,10 +197,137 @@ class ModelConfig:
 
         return total_params
 
-    def save(self, path: str):
-        """Save config to JSON file"""
+    def to_hf_config(self) -> dict:
+        """Convert to HuggingFace-compatible config format"""
+
+        if self.model_architecture == "transformer":
+            # Base HuggingFace config structure
+            hf_config = {
+                # Model identification
+                "model_type": "llm-lab-transformer",
+                "architectures": ["TransformerLLM"],
+
+                # Core architecture (using HF standard names)
+                "hidden_size": self.d_model,
+                "num_hidden_layers": self.n_layers,
+                "num_attention_heads": self.n_heads,
+                "vocab_size": self.vocab_size,
+                "max_position_embeddings": self.max_seq_len,
+
+                # Feed-forward
+                "intermediate_size": self.d_ff,
+                "hidden_act": self.activation,
+
+                # Regularization
+                "dropout": self.dropout,
+
+                # Normalization
+                "layer_norm_eps": self.norm_eps if self.norm_type == "layernorm" else None,
+                "rms_norm_eps": self.norm_eps if self.norm_type == "rmsnorm" else None,
+
+                # Attention configuration
+                "attention_bias": self.attention_bias,
+                "attention_type": self.attention_type,
+
+                # Positional encoding
+                "position_embedding_type": self.positional_encoding,
+
+                # Model settings
+                "tie_word_embeddings": self.tie_word_embeddings,
+                "is_encoder_decoder": False,
+                "use_cache": True,
+
+                # Tokenizer
+                "tokenizer_name": self.tokenizer_name,
+            }
+
+            # Add GQA-specific config
+            if self.attention_type == "gqa" and self.n_kv_heads:
+                hf_config["num_key_value_heads"] = self.n_kv_heads
+
+            # Add MLA-specific config
+            if self.attention_type == "mla":
+                hf_config["d_latent"] = self.d_latent
+                hf_config["d_rope_latent"] = self.d_rope_latent
+
+            # Add MoE-specific config
+            if self.use_moe:
+                hf_config["use_moe"] = self.use_moe
+                hf_config["num_experts"] = self.num_experts
+                hf_config["num_experts_per_token"] = self.num_experts_per_token
+                hf_config["load_balancing_loss_weight"] = self.load_balancing_loss_weight
+                hf_config["router_z_loss_weight"] = self.router_z_loss_weight
+                if self.moe_layers:
+                    hf_config["moe_layers"] = self.moe_layers
+
+            # Add sliding window if used
+            if self.sliding_window:
+                hf_config["sliding_window"] = self.sliding_window
+
+            # Remove None values for cleaner config
+            hf_config = {k: v for k, v in hf_config.items() if v is not None}
+
+        elif self.model_architecture == "mamba2":
+            # Mamba2 config (less standardized in HF)
+            hf_config = {
+                "model_type": "mamba2",
+                "architectures": ["Mamba2LLM"],
+
+                # Core
+                "hidden_size": self.d_model,
+                "num_hidden_layers": self.n_layers,
+                "vocab_size": self.vocab_size,
+                "max_position_embeddings": self.max_seq_len,
+
+                # Mamba2-specific
+                "state_size": self.state_size,
+                "expand_factor": self.expand_factor,
+                "conv_kernel_size": self.conv_kernel_size,
+                "headdim": self.headdim,
+                "ngroups": self.ngroups,
+                "chunk_size": self.chunk_size,
+
+                # Normalization
+                "layer_norm_eps": self.norm_eps if self.norm_type == "layernorm" else None,
+                "rms_norm_eps": self.norm_eps if self.norm_type == "rmsnorm" else None,
+
+                # Model settings
+                "tie_word_embeddings": self.tie_word_embeddings,
+                "is_encoder_decoder": False,
+
+                # Tokenizer
+                "tokenizer_name": self.tokenizer_name,
+            }
+
+            hf_config = {k: v for k, v in hf_config.items() if v is not None}
+
+        return hf_config
+
+    def save_hf_config(self, path: str):
+        """Save config in HuggingFace format (as config.json)"""
+        hf_config = self.to_hf_config()
+        with open(path, 'w') as f:
+            json.dump(hf_config, f, indent=2)
+
+    def save(self, path: str, also_save_hf: bool = True):
+        """Save config to JSON file
+
+        Args:
+            path: Path to save internal config (e.g., model_config.json)
+            also_save_hf: If True, also saves HuggingFace format as config.json
+        """
+        import os
+
+        # Save internal format
         with open(path, 'w') as f:
             json.dump(asdict(self), f, indent=2)
+
+        # Also save HuggingFace format
+        if also_save_hf:
+            # Save in same directory as config.json
+            dir_path = os.path.dirname(path) or "."
+            hf_path = os.path.join(dir_path, "config.json")
+            self.save_hf_config(hf_path)
 
     @classmethod
     def load(cls, path: str):
@@ -188,7 +341,7 @@ class TrainingConfig:
     """Training configuration"""
 
     # Model
-    model_config_path: str = "data/checkpoints/model_config.json"
+    model_config_path: str = "/app/data/model_config.json"
 
     # Training steps
     max_steps: int = 10000

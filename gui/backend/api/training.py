@@ -51,7 +51,7 @@ class TrainingRequest(BaseModel):
     model_cfg: Dict[str, Any]
     training_cfg: Dict[str, Any]
     checkpoint_path: Optional[str] = None
-    output_dir: str = "/app/data/checkpoints"
+    output_dir: str = "/app/data"
     additional_steps: int = 0
 
 
@@ -196,7 +196,7 @@ class MetricsCallback:
 
 
 def run_training(model_config_dict: Dict, train_config_dict: Dict,
-                 checkpoint_path: Optional[str] = None, output_dir: str = "/app/data/checkpoints",
+                 checkpoint_path: Optional[str] = None, output_dir: str = "/app/data",
                  additional_steps: int = 0):
     """Run training in a separate thread"""
     try:

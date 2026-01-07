@@ -72,8 +72,11 @@ def evaluate_model(model: nn.Module, val_loader: DataLoader, config: TrainingCon
             x, y = x.to(device), y.to(device)
 
             with autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = model(x)
+                logits, aux_loss = model(x)
                 loss = F.cross_entropy(logits.view(-1, vocab_size), y.view(-1))
+                # Add MoE auxiliary loss if present
+                if aux_loss is not None:
+                    loss = loss + aux_loss
 
             total_loss += loss.item() * y.numel()
             total_tokens += y.numel()
@@ -157,7 +160,7 @@ def train_model(
     model_config: ModelConfig,
     train_config: TrainingConfig,
     checkpoint_path: str = None,
-    output_dir: str = "/app/data/checkpoints",
+    output_dir: str = "/app/data",
     additional_steps: int = 0,
     load_optimizer_state: bool = True,
     callback: callable = None
@@ -376,8 +379,11 @@ def train_model(
             # Mamba2's sequential scan + checkpointing recomputation uses more memory
             use_checkpoint = (model_config.model_architecture == "transformer")
             with autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = model(x, use_checkpoint=use_checkpoint)
+                logits, aux_loss = model(x, use_checkpoint=use_checkpoint)
                 loss = F.cross_entropy(logits.view(-1, model_config.vocab_size), y.view(-1))
+                # Add MoE auxiliary loss if present
+                if aux_loss is not None:
+                    loss = loss + aux_loss
                 loss = loss / train_config.gradient_accumulation_steps
 
             # No gradient scaling needed for bfloat16 (unlike float16)

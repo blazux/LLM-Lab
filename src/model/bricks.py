@@ -536,6 +536,168 @@ class StandardFFN(nn.Module):
         return self.linear2(self.dropout(self.activation(self.linear1(x))))
 
 
+class MoEFFN(nn.Module):
+    """
+    Mixture of Experts Feed-Forward Network
+
+    Replaces standard FFN with multiple expert FFNs and a learned router.
+    Each token is routed to top-K experts based on router scores.
+
+    Architecture:
+    - Router: Linear layer that computes expert scores for each token
+    - Experts: num_experts copies of the chosen FFN type (SwiGLU, GeGLU, etc.)
+    - Top-K Gating: Each token is processed by num_experts_per_token experts
+    - Load Balancing: Auxiliary loss to encourage even expert utilization
+
+    Used in: Mixtral, DeepSeek, Switch Transformer, GShard
+
+    Args:
+        config: ModelConfig with MoE parameters
+            - num_experts: Number of expert FFNs
+            - num_experts_per_token: Top-K routing (usually 2)
+            - activation: Type of FFN to use for each expert
+            - d_ff: Hidden dimension for each expert
+            - load_balancing_loss_weight: Weight for load balancing loss
+            - router_z_loss_weight: Weight for router z-loss
+    """
+    def __init__(self, config):
+        super().__init__()
+        from config import ModelConfig
+
+        self.d_model = config.d_model
+        self.num_experts = config.num_experts
+        self.num_experts_per_token = config.num_experts_per_token
+        self.load_balancing_loss_weight = config.load_balancing_loss_weight
+        self.router_z_loss_weight = config.router_z_loss_weight
+
+        # Router: learns which experts to use for each token
+        self.router = nn.Linear(self.d_model, self.num_experts, bias=False)
+
+        # Experts: create num_experts copies of the same FFN type
+        self.experts = nn.ModuleList()
+        for _ in range(self.num_experts):
+            if config.activation == 'swiglu':
+                expert = SwiGLU(config.d_model, config.d_ff, config.dropout)
+            elif config.activation == 'geglu':
+                expert = GeGLU(config.d_model, config.d_ff, config.dropout)
+            elif config.activation == 'reglu':
+                expert = ReGLU(config.d_model, config.d_ff, config.dropout)
+            else:
+                expert = StandardFFN(config.d_model, config.d_ff, config.activation, config.dropout)
+            self.experts.append(expert)
+
+    def forward(self, x):
+        """
+        Forward pass with top-K expert routing
+
+        Args:
+            x: (batch, seq_len, d_model)
+
+        Returns:
+            output: (batch, seq_len, d_model)
+            aux_loss: Scalar auxiliary loss (load balancing + z-loss)
+        """
+        batch_size, seq_len, d_model = x.shape
+
+        # Flatten batch and sequence dimensions for routing
+        x_flat = x.view(-1, d_model)  # (batch * seq_len, d_model)
+
+        # Router computes expert scores
+        router_logits = self.router(x_flat)  # (batch * seq_len, num_experts)
+        router_probs = F.softmax(router_logits, dim=-1)  # (batch * seq_len, num_experts)
+
+        # Top-K selection: pick top num_experts_per_token experts for each token
+        topk_probs, topk_indices = torch.topk(router_probs, k=self.num_experts_per_token, dim=-1)
+        # topk_probs: (batch * seq_len, num_experts_per_token)
+        # topk_indices: (batch * seq_len, num_experts_per_token)
+
+        # Normalize topk probabilities (so they sum to 1)
+        topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True)
+
+        # Compute expert outputs
+        # Strategy: For each token, compute outputs from selected experts and combine
+        output = torch.zeros_like(x_flat)  # (batch * seq_len, d_model)
+
+        # Process each expert
+        for expert_idx in range(self.num_experts):
+            # Find which tokens route to this expert
+            expert_mask = (topk_indices == expert_idx)  # (batch * seq_len, num_experts_per_token)
+            token_expert_mask = expert_mask.any(dim=-1)  # (batch * seq_len,) - tokens using this expert
+
+            if not token_expert_mask.any():
+                continue  # No tokens route to this expert
+
+            # Get tokens for this expert
+            expert_tokens = x_flat[token_expert_mask]  # (num_tokens_for_expert, d_model)
+
+            # Compute expert output
+            expert_out = self.experts[expert_idx](expert_tokens)  # (num_tokens_for_expert, d_model)
+
+            # Get routing weights for this expert
+            # Find position of this expert in topk for each token
+            expert_weights = torch.zeros(token_expert_mask.sum(), device=x.device)
+            for k in range(self.num_experts_per_token):
+                mask_k = expert_mask[token_expert_mask, k]  # Tokens where this expert is in position k
+                expert_weights[mask_k] = topk_probs[token_expert_mask, k][mask_k]
+
+            # Add weighted expert output to final output
+            output[token_expert_mask] += expert_weights.unsqueeze(-1) * expert_out
+
+        # Reshape back to (batch, seq_len, d_model)
+        output = output.view(batch_size, seq_len, d_model)
+
+        # Compute auxiliary losses
+        aux_loss = self._compute_aux_loss(router_logits, router_probs, topk_indices)
+
+        return output, aux_loss
+
+    def _compute_aux_loss(self, router_logits, router_probs, topk_indices):
+        """
+        Compute auxiliary losses for MoE training
+
+        1. Load Balancing Loss: Encourages even distribution of tokens across experts
+        2. Router Z-Loss: Prevents overconfident routing (large logits)
+
+        Args:
+            router_logits: (batch * seq_len, num_experts) - raw router outputs
+            router_probs: (batch * seq_len, num_experts) - softmax probabilities
+            topk_indices: (batch * seq_len, num_experts_per_token) - selected expert indices
+
+        Returns:
+            aux_loss: Scalar tensor
+        """
+        num_tokens = router_probs.shape[0]
+
+        # 1. Load Balancing Loss (Switch Transformer formulation)
+        # Encourages: P(expert) * fraction_tokens_to_expert to be uniform
+
+        # f_i: Fraction of tokens assigned to expert i (based on top-k selection)
+        expert_counts = torch.zeros(self.num_experts, device=router_probs.device)
+        for i in range(self.num_experts):
+            expert_counts[i] = (topk_indices == i).sum()
+        f_i = expert_counts / (num_tokens * self.num_experts_per_token)  # Normalize
+
+        # P_i: Average router probability for expert i (over all tokens)
+        P_i = router_probs.mean(dim=0)  # (num_experts,)
+
+        # Load balancing loss: num_experts * sum(f_i * P_i)
+        # This is minimized when f_i and P_i are uniform (both = 1/num_experts)
+        load_balance_loss = self.num_experts * (f_i * P_i).sum()
+
+        # 2. Router Z-Loss (optional, for stability)
+        # Penalizes large router logits to prevent overconfidence
+        # z_loss = mean(log(sum(exp(router_logits)))^2)
+        router_z_loss = torch.logsumexp(router_logits, dim=-1).pow(2).mean()
+
+        # Combine losses with weights
+        aux_loss = (
+            self.load_balancing_loss_weight * load_balance_loss +
+            self.router_z_loss_weight * router_z_loss
+        )
+
+        return aux_loss
+
+
 # ============================================================================
 # MAMBA2 SSM BLOCK
 # ============================================================================
