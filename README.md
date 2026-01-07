@@ -64,7 +64,7 @@ Launch the CLI and you'll be greeted by a glorious retro menu:
 
 ```
 ╔═══════════════════════════════════════════════════════════════╗
-║                   🧠 L L M - L A B O R A T O R Y              ║
+║                   L L M - L A B O R A T O R Y                 ║
 ║       Train, fine-tune, and test custom language models       ║
 ╚═══════════════════════════════════════════════════════════════╝
 
@@ -166,7 +166,7 @@ Align your model with human preferences:
 ### 5. Test and Deploy (Option 7)
 Chat with your creation. Bask in glory or despair. Probably despair initially, but that's part of the fun.
 
-### 6. Checkpoint Inspector (Option 6) - NEW!
+### 6. Checkpoint Inspector (Option 6)
 View everything about your checkpoints:
 - Architecture details
 - Training progress
@@ -246,5 +246,3 @@ MIT License - Do whatever you want with this code. Train models, break things, h
 ---
 
 **Built with ❤️, caffeine, and questionable judgment**
-
-*Remember: The best way to learn is to break things. The second best way is to read error messages. Happy training!* 🚀
