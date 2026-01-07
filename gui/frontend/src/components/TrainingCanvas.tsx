@@ -261,7 +261,7 @@ const TrainingCanvas = ({
       const additionalSteps = checkpointPath ? trainingConfig.max_steps : 0;
 
       // Start training via API
-      await startTraining(modelConfig, trainingConfig, checkpointPath, '/app/data/checkpoints', additionalSteps);
+      await startTraining(modelConfig, trainingConfig, checkpointPath, '/app/data', additionalSteps);
 
       // Navigate to monitor
       onStartTraining();

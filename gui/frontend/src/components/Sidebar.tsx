@@ -551,7 +551,7 @@ const RLHF_BLOCKS = [
 interface SidebarProps {
   nodes: Node[];
   onGenerateConfig: () => void;
-  activeTab: 'model' | 'training' | 'sft' | 'rlhf' | 'monitor' | 'inference';
+  activeTab: 'model' | 'training' | 'sft' | 'rlhf' | 'monitor' | 'inference' | 'merge';
   onLoadPreset?: (nodes: Node[], edges: any[]) => void;
   onClearCanvas?: () => void;
   architectureFilter?: 'transformer' | 'mamba2';

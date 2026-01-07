@@ -67,10 +67,13 @@ def print_menu():
     print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}5.{Colors.RESET} {Colors.BOLD}Merge LoRA adapters{Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Merge parameter-efficient LoRA weights back into base model{Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}")
-    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}6.{Colors.RESET} {Colors.BOLD}Test model{Colors.RESET} {Colors.DIM}(inference){Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}6.{Colors.RESET} {Colors.BOLD}Checkpoint info{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Display detailed information about a checkpoint file{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}7.{Colors.RESET} {Colors.BOLD}Test model{Colors.RESET} {Colors.DIM}(inference){Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Test your self-trained model{Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}")
-    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}7.{Colors.RESET} {Colors.BOLD}Exit{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}8.{Colors.RESET} {Colors.BOLD}Exit{Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Close the application{Colors.RESET}")
 
     print(f"\n{Colors.BOLD}{Colors.WHITE}└{'─' * 78}┘{Colors.RESET}")
@@ -1106,6 +1109,288 @@ def merge_lora_adapters():
         raise
 
 
+def checkpoint_info():
+    """Display comprehensive information about a checkpoint"""
+    print_section_header("Checkpoint Information", "📋")
+
+    print(f"{Colors.CYAN}ℹ{Colors.RESET}  This tool analyzes checkpoint files and displays detailed information.")
+    print(f"  {Colors.DIM}Architecture, training progress, metrics, LoRA status, and more.{Colors.RESET}\n")
+
+    checkpoint_path = get_input("Checkpoint path", default="/app/data/best_model.pt")
+
+    if not os.path.exists(checkpoint_path):
+        print(f"❌ Checkpoint not found: {checkpoint_path}")
+        return
+
+    import torch
+    from datetime import datetime
+
+    try:
+        print(f"\n🔄 Loading checkpoint from {checkpoint_path}...")
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+        # Get file info
+        file_stat = os.stat(checkpoint_path)
+        file_size_mb = file_stat.st_size / (1024 * 1024)
+        modified_time = datetime.fromtimestamp(file_stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+
+        # Auto-detect checkpoint type
+        has_train_config = 'train_config' in checkpoint
+        has_sft_config = 'sft_config' in checkpoint
+        has_rlhf_config = 'rlhf_config' in checkpoint
+        has_optimizer = 'optimizer_states' in checkpoint or 'optimizer_state_dict' in checkpoint
+
+        if has_sft_config:
+            checkpoint_type = "SFT (Supervised Fine-Tuning)"
+            config_key = 'sft_config'
+        elif has_rlhf_config:
+            checkpoint_type = "RLHF (Reinforcement Learning from Human Feedback)"
+            config_key = 'rlhf_config'
+        elif has_train_config:
+            checkpoint_type = "Base (Pretraining)"
+            config_key = 'train_config'
+        else:
+            checkpoint_type = "Merged (LoRA weights baked in)"
+            config_key = None
+
+        # Check for LoRA weights
+        state_dict = checkpoint.get('model_state_dict', {})
+        lora_keys = [key for key in state_dict.keys() if 'lora' in key.lower()]
+        has_lora = len(lora_keys) > 0
+
+        # Get model config
+        model_config = checkpoint.get('model_config')
+        if model_config is None:
+            print("❌ Checkpoint does not contain model_config")
+            return
+
+        # ===== DISPLAY INFO =====
+
+        # File Information
+        print(f"\n{Colors.BOLD}{Colors.BLUE}╔═══════════════════════════════════════════════════════════════════════════╗{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}FILE INFORMATION{' ' * 59}{Colors.BLUE}║{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.BLUE}╚═══════════════════════════════════════════════════════════════════════════╝{Colors.RESET}")
+        print(f"  {Colors.BOLD}Path:{Colors.RESET} {checkpoint_path}")
+        print(f"  {Colors.BOLD}Size:{Colors.RESET} {file_size_mb:.2f} MB")
+        print(f"  {Colors.BOLD}Modified:{Colors.RESET} {modified_time}")
+        print(f"  {Colors.BOLD}Type:{Colors.RESET} {Colors.GREEN if checkpoint_type == 'Base (Pretraining)' else Colors.YELLOW if 'SFT' in checkpoint_type else Colors.PURPLE if 'RLHF' in checkpoint_type else Colors.CYAN}{checkpoint_type}{Colors.RESET}")
+
+        # Model Architecture
+        print(f"\n{Colors.BOLD}{Colors.BLUE}╔═══════════════════════════════════════════════════════════════════════════╗{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}MODEL ARCHITECTURE{' ' * 57}{Colors.BLUE}║{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.BLUE}╚═══════════════════════════════════════════════════════════════════════════╝{Colors.RESET}")
+
+        arch = model_config.model_architecture
+        print(f"  {Colors.BOLD}Architecture:{Colors.RESET} {Colors.CYAN}{arch.upper()}{Colors.RESET}")
+        print(f"  {Colors.BOLD}Tokenizer:{Colors.RESET} {model_config.tokenizer_name}")
+        print(f"  {Colors.BOLD}Hidden Size (d_model):{Colors.RESET} {model_config.d_model}")
+        print(f"  {Colors.BOLD}Layers:{Colors.RESET} {model_config.n_layers}")
+        print(f"  {Colors.BOLD}Vocabulary Size:{Colors.RESET} {model_config.vocab_size:,}")
+        print(f"  {Colors.BOLD}Max Sequence Length:{Colors.RESET} {model_config.max_seq_len}")
+        print(f"  {Colors.BOLD}Dropout:{Colors.RESET} {model_config.dropout}")
+        print(f"  {Colors.BOLD}Normalization:{Colors.RESET} {model_config.norm_type.upper()}")
+
+        if arch == "transformer":
+            print(f"\n  {Colors.DIM}Transformer-specific:{Colors.RESET}")
+            print(f"    {Colors.BOLD}Attention Type:{Colors.RESET} {model_config.attention_type.upper()}")
+            print(f"    {Colors.BOLD}Positional Encoding:{Colors.RESET} {model_config.positional_encoding.upper() if model_config.positional_encoding else 'None'}")
+            print(f"    {Colors.BOLD}Activation:{Colors.RESET} {model_config.activation.upper() if model_config.activation else 'N/A'}")
+            print(f"    {Colors.BOLD}Attention Heads:{Colors.RESET} {model_config.n_heads}")
+            if model_config.attention_type == 'gqa':
+                print(f"    {Colors.BOLD}KV Heads:{Colors.RESET} {model_config.n_kv_heads}")
+            print(f"    {Colors.BOLD}Feed-Forward Dim:{Colors.RESET} {model_config.d_ff}")
+
+            # MoE info
+            if model_config.use_moe:
+                print(f"\n  {Colors.DIM}Mixture of Experts (MoE):{Colors.RESET}")
+                print(f"    {Colors.BOLD}Enabled:{Colors.RESET} {Colors.GREEN}Yes{Colors.RESET}")
+                print(f"    {Colors.BOLD}Num Experts:{Colors.RESET} {model_config.num_experts}")
+                print(f"    {Colors.BOLD}Experts per Token:{Colors.RESET} {model_config.num_experts_per_token}")
+                if model_config.moe_layers:
+                    print(f"    {Colors.BOLD}MoE Layers:{Colors.RESET} {model_config.moe_layers}")
+                else:
+                    print(f"    {Colors.BOLD}MoE Layers:{Colors.RESET} All layers")
+
+        elif arch == "mamba2":
+            print(f"\n  {Colors.DIM}Mamba2-specific:{Colors.RESET}")
+            print(f"    {Colors.BOLD}State Size:{Colors.RESET} {model_config.state_size}")
+            print(f"    {Colors.BOLD}Expand Factor:{Colors.RESET} {model_config.expand_factor}")
+            print(f"    {Colors.BOLD}Head Dimension:{Colors.RESET} {model_config.headdim}")
+            print(f"    {Colors.BOLD}Number of Groups:{Colors.RESET} {model_config.ngroups}")
+            print(f"    {Colors.BOLD}Chunk Size:{Colors.RESET} {model_config.chunk_size}")
+            print(f"    {Colors.BOLD}Conv Kernel Size:{Colors.RESET} {model_config.conv_kernel_size}")
+
+        # Parameter count
+        total_params = sum(p.numel() for p in state_dict.values() if isinstance(p, torch.Tensor))
+        print(f"\n  {Colors.BOLD}Total Parameters:{Colors.RESET} {Colors.YELLOW}{total_params:,}{Colors.RESET} ({total_params / 1_000_000:.1f}M)")
+
+        # Training Progress
+        print(f"\n{Colors.BOLD}{Colors.BLUE}╔═══════════════════════════════════════════════════════════════════════════╗{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}TRAINING PROGRESS{' ' * 59}{Colors.BLUE}║{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.BLUE}╚═══════════════════════════════════════════════════════════════════════════╝{Colors.RESET}")
+
+        step = checkpoint.get('step', 'N/A')
+        total_tokens = checkpoint.get('total_tokens_seen', None)
+
+        print(f"  {Colors.BOLD}Training Step:{Colors.RESET} {step}")
+        if total_tokens:
+            print(f"  {Colors.BOLD}Total Tokens Seen:{Colors.RESET} {total_tokens:,} ({total_tokens / 1_000_000:.1f}M)")
+
+        # Performance Metrics
+        has_metrics = False
+        eval_metrics = checkpoint.get('eval_metrics', {})
+        final_metrics = checkpoint.get('final_metrics', {})
+        best_val_loss = checkpoint.get('best_val_loss', None)
+
+        if eval_metrics or final_metrics or best_val_loss:
+            has_metrics = True
+            print(f"\n{Colors.BOLD}{Colors.BLUE}╔═══════════════════════════════════════════════════════════════════════════╗{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}PERFORMANCE METRICS{' ' * 56}{Colors.BLUE}║{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.BLUE}╚═══════════════════════════════════════════════════════════════════════════╝{Colors.RESET}")
+
+            if best_val_loss is not None:
+                print(f"  {Colors.BOLD}Best Validation Loss:{Colors.RESET} {Colors.GREEN}{best_val_loss:.4f}{Colors.RESET}")
+
+            if eval_metrics:
+                print(f"\n  {Colors.DIM}Evaluation Metrics:{Colors.RESET}")
+                if 'val_loss' in eval_metrics:
+                    print(f"    {Colors.BOLD}Validation Loss:{Colors.RESET} {eval_metrics['val_loss']:.4f}")
+                if 'val_accuracy' in eval_metrics:
+                    print(f"    {Colors.BOLD}Validation Accuracy:{Colors.RESET} {eval_metrics['val_accuracy']:.4f}")
+                if 'val_perplexity' in eval_metrics:
+                    print(f"    {Colors.BOLD}Validation Perplexity:{Colors.RESET} {eval_metrics['val_perplexity']:.2f}")
+
+            if final_metrics:
+                print(f"\n  {Colors.DIM}Final Metrics:{Colors.RESET}")
+                if 'val_loss' in final_metrics:
+                    print(f"    {Colors.BOLD}Final Loss:{Colors.RESET} {final_metrics['val_loss']:.4f}")
+                if 'val_accuracy' in final_metrics:
+                    print(f"    {Colors.BOLD}Final Accuracy:{Colors.RESET} {final_metrics['val_accuracy']:.4f}")
+                if 'val_perplexity' in final_metrics:
+                    print(f"    {Colors.BOLD}Final Perplexity:{Colors.RESET} {final_metrics['val_perplexity']:.2f}")
+
+        # Training Configuration
+        if config_key:
+            training_config = checkpoint.get(config_key)
+            if training_config:
+                print(f"\n{Colors.BOLD}{Colors.BLUE}╔═══════════════════════════════════════════════════════════════════════════╗{Colors.RESET}")
+                print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}TRAINING CONFIGURATION{' ' * 53}{Colors.BLUE}║{Colors.RESET}")
+                print(f"{Colors.BOLD}{Colors.BLUE}╚═══════════════════════════════════════════════════════════════════════════╝{Colors.RESET}")
+
+                # Get learning rate (different keys for different configs)
+                lr = getattr(training_config, 'lr', None) or getattr(training_config, 'learning_rate', None)
+                if lr:
+                    print(f"  {Colors.BOLD}Learning Rate:{Colors.RESET} {lr}")
+
+                print(f"  {Colors.BOLD}Optimizer:{Colors.RESET} {training_config.optimizer.upper()}")
+                print(f"  {Colors.BOLD}Weight Decay:{Colors.RESET} {training_config.weight_decay}")
+
+                if hasattr(training_config, 'scheduler'):
+                    print(f"  {Colors.BOLD}LR Scheduler:{Colors.RESET} {training_config.scheduler}")
+                    print(f"  {Colors.BOLD}Warmup Steps:{Colors.RESET} {training_config.warmup_steps}")
+
+                print(f"  {Colors.BOLD}Batch Size:{Colors.RESET} {training_config.batch_size}")
+                print(f"  {Colors.BOLD}Gradient Accumulation:{Colors.RESET} {training_config.gradient_accumulation_steps}")
+
+                effective_batch = training_config.batch_size * training_config.gradient_accumulation_steps
+                print(f"  {Colors.BOLD}Effective Batch Size:{Colors.RESET} {Colors.YELLOW}{effective_batch}{Colors.RESET}")
+
+                # LoRA info from config
+                if hasattr(training_config, 'use_lora') and training_config.use_lora:
+                    print(f"\n  {Colors.DIM}LoRA Configuration:{Colors.RESET}")
+                    print(f"    {Colors.BOLD}Enabled:{Colors.RESET} {Colors.GREEN}Yes{Colors.RESET}")
+                    print(f"    {Colors.BOLD}Preset:{Colors.RESET} {training_config.lora_preset}")
+                    print(f"    {Colors.BOLD}Rank (r):{Colors.RESET} {training_config.lora_r}")
+                    print(f"    {Colors.BOLD}Alpha:{Colors.RESET} {training_config.lora_alpha}")
+                    print(f"    {Colors.BOLD}Dropout:{Colors.RESET} {training_config.lora_dropout}")
+
+        # LoRA Status
+        print(f"\n{Colors.BOLD}{Colors.BLUE}╔═══════════════════════════════════════════════════════════════════════════╗{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}LORA STATUS{' ' * 64}{Colors.BLUE}║{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.BLUE}╚═══════════════════════════════════════════════════════════════════════════╝{Colors.RESET}")
+
+        if has_lora:
+            print(f"  {Colors.BOLD}LoRA Weights Present:{Colors.RESET} {Colors.YELLOW}Yes{Colors.RESET}")
+            print(f"  {Colors.BOLD}LoRA Parameters:{Colors.RESET} {len(lora_keys)} tensors")
+            print(f"  {Colors.DIM}This checkpoint contains unmerged LoRA adapter weights.{Colors.RESET}")
+            print(f"  {Colors.DIM}Use 'Merge LoRA adapters' to create a merged checkpoint.{Colors.RESET}")
+        else:
+            print(f"  {Colors.BOLD}LoRA Weights Present:{Colors.RESET} {Colors.GREEN}No{Colors.RESET}")
+            if checkpoint_type == "Merged (LoRA weights baked in)":
+                print(f"  {Colors.DIM}This is a merged checkpoint with LoRA weights baked in.{Colors.RESET}")
+            else:
+                print(f"  {Colors.DIM}This checkpoint was trained without LoRA or LoRA was saved separately.{Colors.RESET}")
+
+        # Checkpoint Contents
+        print(f"\n{Colors.BOLD}{Colors.BLUE}╔═══════════════════════════════════════════════════════════════════════════╗{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}CHECKPOINT CONTENTS{' ' * 57}{Colors.BLUE}║{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.BLUE}╚═══════════════════════════════════════════════════════════════════════════╝{Colors.RESET}")
+
+        contents = []
+        if 'model_state_dict' in checkpoint:
+            contents.append("✓ Model weights")
+        if has_optimizer:
+            contents.append("✓ Optimizer state(s)")
+        if 'scheduler_states' in checkpoint:
+            contents.append("✓ Scheduler state(s)")
+        if 'model_config' in checkpoint:
+            contents.append("✓ Model configuration")
+        if config_key and config_key in checkpoint:
+            contents.append(f"✓ Training configuration ({config_key})")
+        if has_metrics:
+            contents.append("✓ Performance metrics")
+
+        for item in contents:
+            print(f"  {item}")
+
+        if has_optimizer:
+            print(f"\n  {Colors.DIM}Note: This checkpoint includes optimizer/scheduler states for resuming training.{Colors.RESET}")
+        else:
+            print(f"\n  {Colors.DIM}Note: This is a model-only checkpoint (no optimizer states).{Colors.RESET}")
+
+        print(f"\n{Colors.BOLD}{Colors.GREEN}✅ Checkpoint analysis complete!{Colors.RESET}\n")
+
+        # Option to reset token counter
+        if 'total_tokens_seen' in checkpoint:
+            print(f"{Colors.BOLD}{Colors.BLUE}╔═══════════════════════════════════════════════════════════════════════════╗{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.BLUE}║{Colors.RESET} {Colors.BOLD}TOKEN COUNTER RESET{' ' * 57}{Colors.BLUE}║{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.BLUE}╚═══════════════════════════════════════════════════════════════════════════╝{Colors.RESET}")
+
+            current_tokens = checkpoint['total_tokens_seen']
+            print(f"  {Colors.BOLD}Current token count:{Colors.RESET} {current_tokens:,}")
+            print(f"  {Colors.DIM}You can reset this counter if you want to track tokens from scratch.{Colors.RESET}\n")
+
+            reset_choice = get_input("Reset token counter? [y/n]", default="n")
+
+            if reset_choice.lower() in ['y', 'yes']:
+                new_value = get_input("New token count", default="0")
+                try:
+                    new_value_int = int(new_value)
+                    if new_value_int < 0:
+                        print(f"❌ Token count cannot be negative")
+                    else:
+                        # Update checkpoint
+                        checkpoint['total_tokens_seen'] = new_value_int
+
+                        # Save checkpoint
+                        print(f"\n💾 Saving checkpoint with updated token count...")
+                        torch.save(checkpoint, checkpoint_path)
+
+                        print(f"\n{Colors.BOLD}{Colors.GREEN}✅ Token counter reset successfully!{Colors.RESET}")
+                        print(f"   {Colors.BOLD}Old value:{Colors.RESET} {current_tokens:,}")
+                        print(f"   {Colors.BOLD}New value:{Colors.RESET} {new_value_int:,}")
+                        print(f"   {Colors.BOLD}Checkpoint:{Colors.RESET} {checkpoint_path}\n")
+                except ValueError:
+                    print(f"❌ Invalid number: {new_value}")
+            else:
+                print(f"  Token counter unchanged.\n")
+
+    except Exception as e:
+        print(f"\n❌ Error loading checkpoint: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def start_inference():
     """Start inference mode"""
     print_section_header("Interactive Inference Mode", "💬")
@@ -1404,7 +1689,7 @@ def main():
 
     while True:
         print_menu()
-        choice = input(f"\n{Colors.BOLD}➤{Colors.RESET} {Colors.WHITE}Enter your choice {Colors.DIM}(1-7){Colors.RESET}: ").strip()
+        choice = input(f"\n{Colors.BOLD}➤{Colors.RESET} {Colors.WHITE}Enter your choice {Colors.DIM}(1-8){Colors.RESET}: ").strip()
 
         if choice == "1":
             configure_model()
@@ -1417,14 +1702,16 @@ def main():
         elif choice == "5":
             merge_lora_adapters()
         elif choice == "6":
-            start_inference()
+            checkpoint_info()
         elif choice == "7":
+            start_inference()
+        elif choice == "8":
             print(f"\n{Colors.BOLD}{Colors.CYAN}{'─' * 60}{Colors.RESET}")
             print(f"{Colors.BOLD}{Colors.PURPLE}{'Thank you for using LLM-Laboratory!':^60}{Colors.RESET}")
             print(f"{Colors.BOLD}{Colors.CYAN}{'─' * 60}{Colors.RESET}\n")
             sys.exit(0)
         else:
-            print_error(f"Invalid choice: '{choice}'. Please enter a number between 1-7.")
+            print_error(f"Invalid choice: '{choice}'. Please enter a number between 1-8.")
 
 
 if __name__ == "__main__":

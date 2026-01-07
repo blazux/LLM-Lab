@@ -55,7 +55,7 @@ const initialNodes: Node[] = [
     position: { x: 400, y: 300 },
     data: {
       label: 'Base Model',
-      checkpoint_path: '/app/data/checkpoints/best_model.pt',
+      checkpoint_path: '/app/data/best_model.pt',
     },
   },
 ];
@@ -196,7 +196,7 @@ const SFTCanvas = ({
 
       // Build SFT config
       const sftConfig: SFTConfigData = {
-        policy_checkpoint: baseModelNode.data.checkpoint_path || '/app/data/checkpoints/best_model.pt',
+        policy_checkpoint: baseModelNode.data.checkpoint_path || '/app/data/best_model.pt',
         datasets: datasets,
         optimizer: optimizerNode.type || 'adamw',
         lr: optimizerNode.data.lr || hyperparamsNode?.data.lr || 5e-6,
@@ -212,7 +212,7 @@ const SFTCanvas = ({
         eval_every: hyperparamsNode?.data.eval_every || 500,
         eval_steps: hyperparamsNode?.data.eval_steps || 50,
         save_best_only: true,
-        output_dir: '/app/data/sft_checkpoints',
+        output_dir: '/app/data',
         // LoRA configuration (optional - enabled if node exists)
         use_lora: loraNode ? true : false,
         lora_preset: loraNode?.data.preset || 'minimal',

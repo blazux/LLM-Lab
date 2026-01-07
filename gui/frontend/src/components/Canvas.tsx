@@ -21,6 +21,7 @@ import RLHFCanvas from './RLHFCanvas';
 import TrainingMonitor from './TrainingMonitor';
 import TrainingStatusWidget from './TrainingStatusWidget';
 import Inference from './Inference';
+import MergeLoRA from './MergeLoRA';
 import { useTraining } from '../context/TrainingContext';
 import { AnimatePresence } from 'framer-motion';
 import TokenizerNode from './nodes/TokenizerNode';
@@ -108,7 +109,7 @@ const initialNodes: Node[] = [
 
 const Canvas = () => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const [activeTab, setActiveTab] = useState<'model' | 'training' | 'sft' | 'rlhf' | 'monitor' | 'inference'>('model');
+  const [activeTab, setActiveTab] = useState<'model' | 'training' | 'sft' | 'rlhf' | 'monitor' | 'inference' | 'merge'>('model');
   const [architectureFilter, setArchitectureFilter] = useState<'transformer' | 'mamba2'>('transformer');
 
   // Model Architecture state
@@ -610,6 +611,16 @@ const Canvas = () => {
           >
             💬 Inference
           </button>
+          <button
+            onClick={() => setActiveTab('merge')}
+            className={`px-4 py-2 rounded-lg font-semibold text-sm transition-all ${
+              activeTab === 'merge'
+                ? 'bg-teal-600 text-white shadow-lg'
+                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+            }`}
+          >
+            🔀 LoRA Merge
+          </button>
         </div>
 
         {/* Canvas Area */}
@@ -766,6 +777,11 @@ const Canvas = () => {
           {/* Inference */}
           {activeTab === 'inference' && (
             <Inference />
+          )}
+
+          {/* LoRA Merge */}
+          {activeTab === 'merge' && (
+            <MergeLoRA />
           )}
         </div>
       </div>
