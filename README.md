@@ -1,4 +1,3 @@
-![LLM-Lab logo](assets/llm-lab_logo.png)
 # 🧪 LLM-Lab
 
 **A mad scientist's playground for training Large Language Models at home.**
