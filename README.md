@@ -1,3 +1,6 @@
+<p align="center">
+  <img src="assets/science.jpg" alt="LLM-lab logo" width="200">
+</p>
 # 🧪 LLM-Lab
 
 **A mad scientist's playground for training Large Language Models at home.**
