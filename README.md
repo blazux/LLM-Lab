@@ -6,8 +6,15 @@
 
 **A mad scientist's playground for training Large Language Models at home.**
 
-> "Why would anyone train an LLM from scratch in their garage?" - Reasonable people
-> "Because we can!" - Us
+<p align="center">
+  <em>“Why would anyone train an LLM from scratch in their garage?”</em><br/>
+  — Reasonable people
+</p>
+
+<p align="center">
+  <strong>“Because we can!”</strong><br/>
+  — Us
+</p>
 
 Welcome to LLM-Lab, where we take perfectly good GPUs and turn them into tiny fireballs of matrix multiplication. This is a **completely experimental, utterly unnecessary, but incredibly fun** framework for training and fine-tuning LLMs from scratch. No cloud credits required. Just you, your GPU, and questionable life choices.
 
