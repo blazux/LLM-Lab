@@ -1,3 +1,4 @@
+![LLM-Lab logo](assets/llm-lab_logo.png)
 # 🧪 LLM-Lab
 
 **A mad scientist's playground for training Large Language Models at home.**
@@ -108,15 +109,15 @@ Launch the CLI and you'll be greeted by a glorious retro menu:
 The web interface is a drag-and-drop playground where you can visually build your model architecture:
 
 **Model Configuration - Build Your Frankenstein**
-![Model Configuration](model_config.png)
+![Model Configuration](assets/model_config.png)
 *Drag attention heads, normalization layers, and activations like you're playing with LEGO*
 
 **Training Configuration - Set It and Forget It**
-![Training Configuration](training_config.png)
+![Training Configuration](assets/training_config.png)
 *Configure optimizers, learning rates, and watch your GPU go brrr*
 
 **Training Monitor - Watch Numbers Go Down (Hopefully)**
-![Training Monitor](training_monitor.png)
+![Training Monitor](assets/training_monitor.png)
 *Real-time metrics, because anxiety is a feature*
 
 > **Note:** The web UI is still a work in progress. When in doubt, use the CLI - it has all the features and won't let you down (much).
