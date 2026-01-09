@@ -214,32 +214,82 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
         training_state["training_config"] = train_config_dict
         training_state["training_type"] = "pretraining"
 
-        # Log received config for verification
-        metrics_queue.put({
-            "type": "log",
-            "level": "info",
-            "message": f"Config received - Tokenizer: {model_config_dict.get('tokenizer_name', 'NOT SET')}",
-            "timestamp": time.time()
-        })
-        metrics_queue.put({
-            "type": "log",
-            "level": "info",
-            "message": f"Config received - Model: architecture={model_config_dict.get('model_architecture')}, d_model={model_config_dict.get('d_model')}, n_layers={model_config_dict.get('n_layers')}, attention={model_config_dict.get('attention_type')}",
-            "timestamp": time.time()
-        })
-
-        # Create config objects
-        model_config = ModelConfig(**model_config_dict)
-        train_config = TrainingConfig(**train_config_dict)
-
-        # Calculate actual target steps for progress tracking
+        # Handle checkpoint-based config loading or fresh training
         start_step = 0
         if checkpoint_path and os.path.exists(checkpoint_path):
+            # Load checkpoint to extract config and step count
             try:
+                metrics_queue.put({
+                    "type": "log",
+                    "level": "info",
+                    "message": f"Loading checkpoint: {checkpoint_path}",
+                    "timestamp": time.time()
+                })
+
                 checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
                 start_step = checkpoint.get('step', 0)
+
+                # Extract model config from checkpoint
+                if 'model_config' not in checkpoint:
+                    raise ValueError(f"Checkpoint does not contain model_config. Cannot resume training.")
+
+                model_config = checkpoint['model_config']
+
+                # Save checkpoint's config to disk (overwrite any existing config)
+                model_config.save(f"{output_dir}/model_config.json")
+
+                # Log that we're using checkpoint config, not UI config
+                metrics_queue.put({
+                    "type": "log",
+                    "level": "info",
+                    "message": f"✓ Using model config from checkpoint (ignoring UI form)",
+                    "timestamp": time.time()
+                })
+                metrics_queue.put({
+                    "type": "log",
+                    "level": "info",
+                    "message": f"Config from checkpoint - Tokenizer: {model_config.tokenizer_name}",
+                    "timestamp": time.time()
+                })
+                metrics_queue.put({
+                    "type": "log",
+                    "level": "info",
+                    "message": f"Config from checkpoint - Model: architecture={model_config.model_architecture}, d_model={model_config.d_model}, n_layers={model_config.n_layers}, attention={model_config.attention_type}, use_moe={model_config.use_moe}",
+                    "timestamp": time.time()
+                })
+
+                # Update training state with checkpoint config
+                training_state["model_config"] = model_config.__dict__
+
             except Exception as e:
-                print(f"Warning: Could not load checkpoint for step count: {e}")
+                error_msg = f"Failed to load checkpoint config: {e}"
+                metrics_queue.put({
+                    "type": "log",
+                    "level": "error",
+                    "message": error_msg,
+                    "timestamp": time.time()
+                })
+                raise ValueError(error_msg)
+        else:
+            # Fresh training - use config from UI
+            metrics_queue.put({
+                "type": "log",
+                "level": "info",
+                "message": f"Config received - Tokenizer: {model_config_dict.get('tokenizer_name', 'NOT SET')}",
+                "timestamp": time.time()
+            })
+            metrics_queue.put({
+                "type": "log",
+                "level": "info",
+                "message": f"Config received - Model: architecture={model_config_dict.get('model_architecture')}, d_model={model_config_dict.get('d_model')}, n_layers={model_config_dict.get('n_layers')}, attention={model_config_dict.get('attention_type')}",
+                "timestamp": time.time()
+            })
+
+            model_config = ModelConfig(**model_config_dict)
+            model_config.save(f"{output_dir}/model_config.json")
+
+        # Create training config object
+        train_config = TrainingConfig(**train_config_dict)
 
         # Update max_steps in state (this is the target step, not the count)
         if additional_steps > 0:
@@ -409,11 +459,24 @@ async def start_training(request: TrainingRequest):
     if training_state["is_training"]:
         raise HTTPException(status_code=400, detail="Training is already in progress")
 
+    # Calculate correct max_steps for progress tracking
+    target_max_steps = request.training_cfg.get("max_steps", 10000)
+
+    # If resuming from checkpoint with additional steps, calculate target
+    if request.checkpoint_path and request.additional_steps > 0:
+        try:
+            import torch
+            checkpoint = torch.load(request.checkpoint_path, map_location="cpu", weights_only=False)
+            start_step = checkpoint.get('step', 0)
+            target_max_steps = start_step + request.additional_steps
+        except Exception as e:
+            print(f"Warning: Could not load checkpoint for step calculation: {e}")
+
     # Reset state
     training_state.update({
         "is_training": True,
         "current_step": 0,
-        "max_steps": request.training_cfg.get("max_steps", 10000),
+        "max_steps": target_max_steps,
         "current_loss": None,
         "current_ppl": None,
         "current_lr": None,
