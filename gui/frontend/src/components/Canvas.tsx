@@ -793,6 +793,7 @@ const Canvas = () => {
             progress={trainingState.progress}
             loss={trainingState.currentLoss}
             perplexity={trainingState.currentPPL}
+            learningRate={trainingState.currentLR}
             onNavigate={() => setActiveTab('monitor')}
           />
         )}

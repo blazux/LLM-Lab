@@ -1,14 +1,15 @@
 import { motion } from 'framer-motion';
-import { TrendingDown, Zap, Activity } from 'lucide-react';
+import { TrendingDown, Zap, Activity, TrendingUp } from 'lucide-react';
 
 interface TrainingStatusWidgetProps {
   progress: number;
   loss: number | null;
   perplexity: number | null;
+  learningRate: number | null;
   onNavigate: () => void;
 }
 
-const TrainingStatusWidget = ({ progress, loss, perplexity, onNavigate }: TrainingStatusWidgetProps) => {
+const TrainingStatusWidget = ({ progress, loss, perplexity, learningRate, onNavigate }: TrainingStatusWidgetProps) => {
   return (
     <motion.div
       initial={{ y: 20, opacity: 0 }}
@@ -55,13 +56,13 @@ const TrainingStatusWidget = ({ progress, loss, perplexity, onNavigate }: Traini
           </div>
 
           {/* Metrics */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-2">
             <div className="bg-orange-700/50 rounded-lg p-2">
               <div className="flex items-center gap-1 mb-1">
                 <TrendingDown className="w-3 h-3 text-orange-200" />
                 <span className="text-orange-200 text-xs">Loss</span>
               </div>
-              <div className="text-white font-bold text-sm">
+              <div className="text-white font-bold text-xs">
                 {loss?.toFixed(4) || '--'}
               </div>
             </div>
@@ -70,8 +71,17 @@ const TrainingStatusWidget = ({ progress, loss, perplexity, onNavigate }: Traini
                 <Zap className="w-3 h-3 text-orange-200" />
                 <span className="text-orange-200 text-xs">PPL</span>
               </div>
-              <div className="text-white font-bold text-sm">
+              <div className="text-white font-bold text-xs">
                 {perplexity?.toFixed(2) || '--'}
+              </div>
+            </div>
+            <div className="bg-orange-700/50 rounded-lg p-2">
+              <div className="flex items-center gap-1 mb-1">
+                <TrendingUp className="w-3 h-3 text-orange-200" />
+                <span className="text-orange-200 text-xs">LR</span>
+              </div>
+              <div className="text-white font-bold text-xs">
+                {learningRate ? learningRate.toExponential(1) : '--'}
               </div>
             </div>
           </div>

@@ -1,18 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Play, Square, Terminal, TrendingDown, Zap, Clock, CheckCircle } from 'lucide-react';
+import { Play, Square, Terminal, TrendingDown, Zap, Clock, CheckCircle, TrendingUp } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useTraining, TrainingLog } from '../context/TrainingContext';
 import { subscribeToMetrics, TrainingMetric, stopTraining } from '../services/trainingApi';
 
 const TrainingMonitor = () => {
   const { trainingState, updateTrainingState, addMetric, updateMetricWithEval, addLog } = useTraining();
-  const { isTraining, progress, currentStep, maxSteps, currentLoss, currentPPL, metrics, logs } = trainingState;
+  const { isTraining, progress, currentStep, maxSteps, currentLoss, currentPPL, currentLR, metrics, logs } = trainingState;
 
   const [eta, setEta] = useState('--:--:--');
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const startTimeRef = useRef<number | null>(null);
   const lastStepRef = useRef<number>(0);
+  const recentStepsRef = useRef<Array<{ step: number; time: number }>>([]);
 
   // Subscribe to real-time metrics when training starts
   useEffect(() => {
@@ -42,27 +43,34 @@ const TrainingMonitor = () => {
 
             addLog('info', `Reconnected to training at step ${metric.current_step || 0}`);
           } else if (metric.type === 'metrics' && metric.step !== undefined) {
-            // Initialize start time on first metric
-            if (!startTimeRef.current) {
-              startTimeRef.current = Date.now();
-              lastStepRef.current = metric.step;
+            // Track recent steps for rolling average ETA
+            const now = Date.now();
+            recentStepsRef.current.push({ step: metric.step, time: now });
+
+            // Keep only last 50 steps for calculation (roughly 5-10 minutes of data)
+            if (recentStepsRef.current.length > 50) {
+              recentStepsRef.current.shift();
             }
 
-            // Calculate ETA
-            const now = Date.now();
-            const elapsed = (now - startTimeRef.current) / 1000; // seconds
-            const stepsCompleted = metric.step - lastStepRef.current;
-            const stepsRemaining = maxSteps - metric.step;
+            // Calculate ETA using rolling average (need at least 5 data points)
+            if (recentStepsRef.current.length >= 5) {
+              const oldestEntry = recentStepsRef.current[0];
+              const newestEntry = recentStepsRef.current[recentStepsRef.current.length - 1];
 
-            if (stepsCompleted > 0 && elapsed > 0) {
-              const stepsPerSecond = stepsCompleted / elapsed;
-              const secondsRemaining = stepsRemaining / stepsPerSecond;
+              const timeElapsed = (newestEntry.time - oldestEntry.time) / 1000; // seconds
+              const stepsCompleted = newestEntry.step - oldestEntry.step;
+              const stepsRemaining = maxSteps - metric.step;
 
-              const hours = Math.floor(secondsRemaining / 3600);
-              const minutes = Math.floor((secondsRemaining % 3600) / 60);
-              const seconds = Math.floor(secondsRemaining % 60);
+              if (stepsCompleted > 0 && timeElapsed > 0) {
+                const stepsPerSecond = stepsCompleted / timeElapsed;
+                const secondsRemaining = stepsRemaining / stepsPerSecond;
 
-              setEta(`${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+                const hours = Math.floor(secondsRemaining / 3600);
+                const minutes = Math.floor((secondsRemaining % 3600) / 60);
+                const seconds = Math.floor(secondsRemaining % 60);
+
+                setEta(`${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+              }
             }
 
             // Update training state
@@ -121,6 +129,7 @@ const TrainingMonitor = () => {
       // Reset timing when not training
       startTimeRef.current = null;
       lastStepRef.current = 0;
+      recentStepsRef.current = [];
       setEta('--:--:--');
     }
   }, [isTraining, maxSteps, updateTrainingState, addMetric, updateMetricWithEval, addLog]);
@@ -211,7 +220,7 @@ const TrainingMonitor = () => {
         </div>
 
         {/* Status Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <motion.div
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
@@ -263,6 +272,22 @@ const TrainingMonitor = () => {
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ delay: 0.3 }}
+            className="bg-slate-800 border border-slate-700 rounded-lg p-4"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-slate-400 text-sm">Learning Rate</span>
+              <TrendingUp className="w-5 h-5 text-yellow-400" />
+            </div>
+            <div className="text-2xl font-bold text-white">
+              {currentLR ? currentLR.toExponential(2) : '--'}
+            </div>
+            <div className="text-xs text-slate-400 mt-2">Current LR</div>
+          </motion.div>
+
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ delay: 0.4 }}
             className="bg-slate-800 border border-slate-700 rounded-lg p-4"
           >
             <div className="flex items-center justify-between mb-2">

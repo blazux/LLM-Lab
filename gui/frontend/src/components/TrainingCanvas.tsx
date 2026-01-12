@@ -177,13 +177,13 @@ const TrainingCanvas = ({
 
       // Gather training config from nodes
       const modelNode = nodes.find(n => n.type === 'model');
-      const datasetNode = nodes.find(n => n.type === 'dataset');
+      const datasetNodes = nodes.filter(n => n.type === 'dataset');
       const optimizerNode = nodes.find(n => ['adamw', 'muon', 'lion', 'sophia'].includes(n.type || ''));
       const schedulerNode = nodes.find(n => ['cosine', 'linear', 'polynomial', 'constant'].includes(n.type || ''));
       const hyperparamsNode = nodes.find(n => n.type === 'hyperparams');
 
-      if (!datasetNode) {
-        alert('Please add a Dataset node to the training canvas');
+      if (datasetNodes.length === 0) {
+        alert('Please add at least one Dataset node to the training canvas');
         return;
       }
       if (!optimizerNode) {
@@ -194,14 +194,20 @@ const TrainingCanvas = ({
       // Get checkpoint path if resuming
       const checkpointPath = modelNode?.data?.resume_training ? modelNode.data.checkpoint_path : undefined;
 
-      // Build training config
-      const trainingConfig: TrainingConfigData = {
-        datasets: [{
-          name: datasetNode.data.dataset_name || 'HuggingFaceFW/fineweb-edu',
+      // Build training config - collect ALL dataset nodes
+      const datasets = datasetNodes.map(datasetNode => {
+        console.log('Dataset node data:', datasetNode.id, datasetNode.data);
+        return {
+          name: datasetNode.data.dataset_name || datasetNode.data.name || 'HuggingFaceFW/fineweb-edu',
           subset: datasetNode.data.subset,
           split: datasetNode.data.split || 'train',
-          weight: 1.0
-        }],
+          weight: datasetNode.data.weight || 1.0
+        };
+      });
+      console.log('Final datasets config:', datasets);
+
+      const trainingConfig: TrainingConfigData = {
+        datasets: datasets,
         optimizer: optimizerNode.type || 'adamw',
         lr: optimizerNode.data.lr || hyperparamsNode?.data.lr || 0.001,
         weight_decay: optimizerNode.data.weight_decay || hyperparamsNode?.data.weight_decay || 0.01,

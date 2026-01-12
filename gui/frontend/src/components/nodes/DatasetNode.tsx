@@ -5,7 +5,8 @@ import { motion } from 'framer-motion';
 interface DatasetNodeProps {
   data: {
     label: string;
-    name?: string;
+    name?: string;  // Legacy field (for backwards compatibility)
+    dataset_name?: string;  // Standard field
     subset?: string;
     split?: string;
     weight?: number;
@@ -24,17 +25,17 @@ export default memo(({ data }: DatasetNodeProps) => {
         <div className="text-3xl">📚</div>
         <div className="flex-1">
           <div className="text-white font-bold text-sm">{data.label}</div>
-          {data.name && (
-            <div className="text-blue-200 text-xs mt-1 truncate" title={data.name}>
-              {data.name}
+          {(data.dataset_name || data.name) && (
+            <div className="text-blue-200 text-xs mt-1 truncate" title={data.dataset_name || data.name}>
+              {data.dataset_name || data.name}
             </div>
           )}
           {data.subset && (
             <div className="text-blue-200 text-xs">
-              {data.subset}
+              subset: {data.subset}
             </div>
           )}
-          {data.weight && (
+          {data.weight && data.weight !== 1.0 && (
             <div className="text-blue-200 text-xs">
               weight: {data.weight}
             </div>

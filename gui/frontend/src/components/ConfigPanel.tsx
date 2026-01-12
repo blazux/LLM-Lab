@@ -609,8 +609,15 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
               </label>
               <input
                 type="text"
-                value={node.data.name || ''}
-                onChange={(e) => handleChange('name', e.target.value)}
+                value={node.data.dataset_name || node.data.name || ''}
+                onChange={(e) => {
+                  // Update dataset_name and clear old 'name' field to avoid conflicts
+                  onUpdate(node.id, {
+                    ...node.data,
+                    dataset_name: e.target.value,
+                    name: undefined  // Clear old field
+                  });
+                }}
                 placeholder="HuggingFaceFW/fineweb-edu"
                 className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
@@ -625,10 +632,13 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
               <input
                 type="text"
                 value={node.data.subset || ''}
-                onChange={(e) => handleChange('subset', e.target.value)}
+                onChange={(e) => handleChange('subset', e.target.value || undefined)}
                 placeholder="e.g., fra_Latn"
                 className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+              <p className="text-xs text-slate-400 mt-1">
+                Leave empty if dataset has no subsets
+              </p>
             </div>
             <div>
               <label className="text-sm font-medium text-slate-300 mb-2 block">
