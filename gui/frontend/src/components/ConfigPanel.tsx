@@ -101,16 +101,19 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
             </div>
             <div>
               <label className="text-sm font-medium text-slate-300 mb-2 block">
-                Max Sequence Length
+                Dropout
               </label>
               <input
                 type="number"
-                value={node.data.max_seq_len || 1024}
-                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
+                step="0.01"
+                min="0"
+                max="1"
+                value={node.data.dropout ?? 0.0}
+                onChange={(e) => handleChange('dropout', parseFloat(e.target.value))}
                 className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
               <p className="text-xs text-slate-400 mt-1">
-                Maximum sequence length for training
+                Dropout probability for regularization (0.0 - 1.0)
               </p>
             </div>
           </div>
@@ -122,8 +125,19 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
           <div className="space-y-4">
             <div className="text-slate-300 text-sm">
               <p className="mb-2">RoPE (Rotary Position Embedding) is a modern positional encoding method that applies rotations to query and key vectors.</p>
-              <p className="text-xs text-slate-400 mt-2">
-                Note: Max sequence length is configured in the Embedding node.
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Sequence Length
+              </label>
+              <input
+                type="number"
+                value={node.data.max_seq_len || 1024}
+                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum sequence length for positional encoding
               </p>
             </div>
           </div>
@@ -134,8 +148,19 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
           <div className="space-y-4">
             <div className="text-slate-300 text-sm">
               <p className="mb-2">ALiBi (Attention with Linear Biases) adds position-dependent biases to attention scores.</p>
-              <p className="text-xs text-slate-400 mt-2">
-                Note: Max sequence length is configured in the Embedding node.
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Sequence Length
+              </label>
+              <input
+                type="number"
+                value={node.data.max_seq_len || 1024}
+                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum sequence length for positional encoding
               </p>
             </div>
           </div>
@@ -146,8 +171,19 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
           <div className="space-y-4">
             <div className="text-slate-300 text-sm">
               <p className="mb-2">YARN (Yet Another RoPE extensioN) extends RoPE for longer context lengths.</p>
-              <p className="text-xs text-slate-400 mt-2">
-                Note: Max sequence length is configured in the Embedding node.
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Sequence Length
+              </label>
+              <input
+                type="number"
+                value={node.data.max_seq_len || 1024}
+                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum sequence length for positional encoding
               </p>
             </div>
           </div>
@@ -158,8 +194,19 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
           <div className="space-y-4">
             <div className="text-slate-300 text-sm">
               <p className="mb-2">Sinusoidal Positional Encoding uses sine and cosine functions at different frequencies (original Transformer).</p>
-              <p className="text-xs text-slate-400 mt-2">
-                Note: Max sequence length is configured in the Embedding node.
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Sequence Length
+              </label>
+              <input
+                type="number"
+                value={node.data.max_seq_len || 1024}
+                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum sequence length for positional encoding
               </p>
             </div>
           </div>
@@ -170,8 +217,19 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
           <div className="space-y-4">
             <div className="text-slate-300 text-sm">
               <p className="mb-2">Learned Positional Embeddings are trainable position vectors (like BERT/GPT-1). Classic baseline for comparing against modern methods like RoPE.</p>
-              <p className="text-xs text-slate-400 mt-2">
-                Note: Max sequence length is configured in the Embedding node.
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Max Sequence Length
+              </label>
+              <input
+                type="number"
+                value={node.data.max_seq_len || 1024}
+                onChange={(e) => handleChange('max_seq_len', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum sequence length for positional encoding
               </p>
             </div>
           </div>
@@ -208,6 +266,25 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
               />
               <p className="text-xs text-slate-400 mt-1">
                 Limit attention to nearby tokens (e.g., 512, 1024, 2048). Leave empty for full attention.
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Attention Bias
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={node.data.attention_bias ?? false}
+                  onChange={(e) => handleChange('attention_bias', e.target.checked)}
+                  className="w-4 h-4 bg-slate-700 border-slate-600 rounded text-green-500 focus:ring-2 focus:ring-green-500"
+                />
+                <span className="text-white text-sm">
+                  Use bias in attention projections
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Typically disabled for modern LLMs (Llama, Qwen, Mistral)
               </p>
             </div>
           </div>
@@ -258,6 +335,25 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 Limit attention to nearby tokens (e.g., 512, 1024, 2048). Leave empty for full attention.
               </p>
             </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Attention Bias
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={node.data.attention_bias ?? false}
+                  onChange={(e) => handleChange('attention_bias', e.target.checked)}
+                  className="w-4 h-4 bg-slate-700 border-slate-600 rounded text-emerald-500 focus:ring-2 focus:ring-emerald-500"
+                />
+                <span className="text-white text-sm">
+                  Use bias in attention projections
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Typically disabled for modern LLMs (Llama, Qwen, Mistral)
+              </p>
+            </div>
           </div>
         );
 
@@ -291,6 +387,25 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
               />
               <p className="text-xs text-slate-400 mt-1">
                 Limit attention to nearby tokens (e.g., 512, 1024, 2048). Leave empty for full attention.
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Attention Bias
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={node.data.attention_bias ?? false}
+                  onChange={(e) => handleChange('attention_bias', e.target.checked)}
+                  className="w-4 h-4 bg-slate-700 border-slate-600 rounded text-teal-500 focus:ring-2 focus:ring-teal-500"
+                />
+                <span className="text-white text-sm">
+                  Use bias in attention projections
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Typically disabled for modern LLMs (Llama, Qwen, Mistral)
               </p>
             </div>
           </div>
@@ -358,6 +473,25 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 Limit attention to nearby tokens (e.g., 512, 1024, 2048). Leave empty for full attention.
               </p>
             </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Attention Bias
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={node.data.attention_bias ?? false}
+                  onChange={(e) => handleChange('attention_bias', e.target.checked)}
+                  className="w-4 h-4 bg-slate-700 border-slate-600 rounded text-cyan-500 focus:ring-2 focus:ring-cyan-500"
+                />
+                <span className="text-white text-sm">
+                  Use bias in attention projections
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Typically disabled for modern LLMs (Llama, Qwen, Mistral)
+              </p>
+            </div>
           </div>
         );
 
@@ -367,7 +501,21 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
           <div className="space-y-4">
             <div className="text-slate-300 text-sm">
               <p className="mb-2">RMSNorm (Root Mean Square Normalization) is a faster alternative to LayerNorm.</p>
-              <p className="text-xs text-slate-400">No additional configuration needed - uses default epsilon value.</p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Epsilon
+              </label>
+              <input
+                type="number"
+                step="0.000001"
+                value={node.data.norm_eps ?? 1e-6}
+                onChange={(e) => handleChange('norm_eps', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Small constant for numerical stability (default: 1e-6)
+              </p>
             </div>
           </div>
         );
@@ -377,7 +525,21 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
           <div className="space-y-4">
             <div className="text-slate-300 text-sm">
               <p className="mb-2">LayerNorm is the classic normalization method from the original Transformer.</p>
-              <p className="text-xs text-slate-400">No additional configuration needed - uses default epsilon value.</p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Epsilon
+              </label>
+              <input
+                type="number"
+                step="0.000001"
+                value={node.data.norm_eps ?? 1e-5}
+                onChange={(e) => handleChange('norm_eps', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Small constant for numerical stability (default: 1e-5)
+              </p>
             </div>
           </div>
         );
@@ -580,21 +742,7 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                When enabled, shares the embedding matrix for output projection (saves memory)
-              </p>
-            </div>
-            <div>
-              <label className="text-sm font-medium text-slate-300 mb-2 block">
-                Vocabulary Size
-              </label>
-              <input
-                type="number"
-                value={node.data.vocab_size || 151936}
-                onChange={(e) => handleChange('vocab_size', parseInt(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-pink-500"
-              />
-              <p className="text-xs text-slate-400 mt-1">
-                Number of tokens in the vocabulary
+                When enabled, shares the embedding matrix for output projection (saves memory). Vocabulary size is configured in the Embedding node.
               </p>
             </div>
           </div>
@@ -922,18 +1070,6 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-red-500"
               />
             </div>
-            <div>
-              <label className="text-sm font-medium text-slate-300 mb-2 block">
-                Weight Decay
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={node.data.weight_decay || 0.1}
-                onChange={(e) => handleChange('weight_decay', parseFloat(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-red-500"
-              />
-            </div>
             <div className="border-t border-slate-600 pt-4">
               <h4 className="text-sm font-semibold text-red-400 mb-3">AdamW Parameters</h4>
             </div>
@@ -991,18 +1127,6 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
               />
             </div>
-            <div>
-              <label className="text-sm font-medium text-slate-300 mb-2 block">
-                Weight Decay
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={node.data.weight_decay || 0.1}
-                onChange={(e) => handleChange('weight_decay', parseFloat(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-              />
-            </div>
             <div className="border-t border-slate-600 pt-4">
               <h4 className="text-sm font-semibold text-orange-400 mb-3">Muon Parameters</h4>
             </div>
@@ -1052,18 +1176,6 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
               />
             </div>
-            <div>
-              <label className="text-sm font-medium text-slate-300 mb-2 block">
-                Weight Decay
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={node.data.weight_decay || 0.1}
-                onChange={(e) => handleChange('weight_decay', parseFloat(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-              />
-            </div>
             <div className="border-t border-slate-600 pt-4">
               <h4 className="text-sm font-semibold text-amber-400 mb-3">Lion Parameters</h4>
             </div>
@@ -1106,18 +1218,6 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 step="0.0001"
                 value={node.data.lr || 0.0001}
                 onChange={(e) => handleChange('lr', parseFloat(e.target.value))}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-rose-500"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium text-slate-300 mb-2 block">
-                Weight Decay
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={node.data.weight_decay || 0.1}
-                onChange={(e) => handleChange('weight_decay', parseFloat(e.target.value))}
                 className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-rose-500"
               />
             </div>
@@ -1255,6 +1355,21 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
               />
               <p className="text-xs text-slate-400 mt-1">
                 Total steps for fresh training, or additional steps when resuming from checkpoint
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Weight Decay
+              </label>
+              <input
+                type="number"
+                step="0.001"
+                value={node.data.weight_decay ?? 0.0}
+                onChange={(e) => handleChange('weight_decay', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                L2 regularization weight (0.0 = no weight decay)
               </p>
             </div>
             <div>

@@ -790,7 +790,12 @@ export const TRAINING_PRESETS: TrainingPreset[] = [
         id: 'muon-1',
         type: 'muon',
         position: { x: 400, y: 300 },
-        data: { label: 'Muon' },
+        data: {
+          label: 'Muon',
+          lr: 0.05,
+          momentum: 0.95,
+          nesterov: true
+        },
       },
       {
         id: 'cosine-1',
@@ -807,8 +812,8 @@ export const TRAINING_PRESETS: TrainingPreset[] = [
           batch_size: 16,
           gradient_accumulation_steps: 4,
           max_steps: 10000,
-          warmup_steps: 500,
-          lr: 0.01,
+          warmup_steps: 1000,
+          lr: 0.05,
           weight_decay: 0.0,
           grad_clip: 1.0,
           eval_every: 500,

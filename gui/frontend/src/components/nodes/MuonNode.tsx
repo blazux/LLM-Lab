@@ -6,7 +6,6 @@ interface MuonNodeProps {
   data: {
     label: string;
     lr?: number;
-    weight_decay?: number;
     momentum?: number;
     nesterov?: boolean;
   };

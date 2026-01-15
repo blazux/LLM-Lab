@@ -119,11 +119,91 @@ const TrainingCanvas = ({
         y: event.clientY,
       });
 
+      // Set default data based on node type
+      let nodeData: any = { label };
+
+      switch (type) {
+        case 'muon':
+          nodeData = {
+            label,
+            lr: 0.05,
+            momentum: 0.95,
+            nesterov: true
+          };
+          break;
+        case 'adamw':
+          nodeData = {
+            label,
+            lr: 0.001,
+            beta1: 0.9,
+            beta2: 0.999,
+            eps: 1e-8
+          };
+          break;
+        case 'lion':
+          nodeData = {
+            label,
+            lr: 0.001,
+            beta1: 0.9,
+            beta2: 0.99
+          };
+          break;
+        case 'sophia':
+          nodeData = {
+            label,
+            lr: 0.001,
+            beta1: 0.965,
+            beta2: 0.99,
+            rho: 0.04
+          };
+          break;
+        case 'cosine':
+          nodeData = {
+            label,
+            warmup_steps: 1000
+          };
+          break;
+        case 'linear':
+          nodeData = {
+            label,
+            warmup_steps: 1000
+          };
+          break;
+        case 'polynomial':
+          nodeData = {
+            label,
+            warmup_steps: 1000
+          };
+          break;
+        case 'hyperparams':
+          nodeData = {
+            label,
+            batch_size: 16,
+            gradient_accumulation_steps: 4,
+            max_steps: 10000,
+            warmup_steps: 1000,
+            lr: 0.05,
+            weight_decay: 0.0,
+            grad_clip: 1.0,
+            eval_every: 500,
+            eval_steps: 100
+          };
+          break;
+        case 'dataset':
+          nodeData = {
+            label,
+            dataset_name: 'HuggingFaceFW/fineweb-edu',
+            split: 'train',
+            weight: 1.0
+          };
+          break;
+      }
+
       const newNode: Node = {
         id: `${type}-${Date.now()}`,
         type,
         position,
-        data: { label },
+        data: nodeData,
       };
 
       setNodes((nds) => nds.concat(newNode));
@@ -206,13 +286,18 @@ const TrainingCanvas = ({
       });
       console.log('Final datasets config:', datasets);
 
+      console.log('=== Training Config Debug ===');
+      console.log('Optimizer node:', optimizerNode?.type, optimizerNode?.data);
+      console.log('Hyperparams node:', hyperparamsNode?.data);
+      console.log('Scheduler node:', schedulerNode?.type, schedulerNode?.data);
+
       const trainingConfig: TrainingConfigData = {
         datasets: datasets,
         optimizer: optimizerNode.type || 'adamw',
-        lr: optimizerNode.data.lr || hyperparamsNode?.data.lr || 0.001,
-        weight_decay: optimizerNode.data.weight_decay || hyperparamsNode?.data.weight_decay || 0.01,
-        batch_size: hyperparamsNode?.data.batch_size || 1,
-        gradient_accumulation_steps: hyperparamsNode?.data.gradient_accumulation_steps || 4,
+        lr: optimizerNode.data.lr ?? hyperparamsNode?.data.lr ?? 0.001,
+        weight_decay: hyperparamsNode?.data.weight_decay ?? 0.01,
+        batch_size: hyperparamsNode?.data.batch_size ?? 1,
+        gradient_accumulation_steps: hyperparamsNode?.data.gradient_accumulation_steps ?? 4,
         max_steps: hyperparamsNode?.data.max_steps || 10000,
         warmup_steps: schedulerNode?.data.warmup_steps || 1000,
         scheduler: schedulerNode?.type || 'cosine',

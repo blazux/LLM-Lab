@@ -6,7 +6,6 @@ interface SophiaNodeProps {
   data: {
     label: string;
     lr?: number;
-    weight_decay?: number;
     beta1?: number;
     beta2?: number;
     rho?: number;

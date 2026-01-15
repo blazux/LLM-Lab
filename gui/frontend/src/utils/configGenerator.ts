@@ -18,6 +18,7 @@ interface ModelConfig {
   n_kv_heads?: number;
   d_ff?: number;
   sliding_window?: number | null;
+  attention_bias?: boolean;
   // MLA-specific
   d_latent?: number | null;
   d_rope_latent?: number | null;
@@ -89,28 +90,42 @@ export const generateConfigFromNodes = (
       case 'embedding':
         config.d_model = node.data.d_model || 896;
         config.vocab_size = node.data.vocab_size || 151936;
-        // Allow configuring max_seq_len from embedding node
-        if (node.data.max_seq_len) {
-          config.max_seq_len = node.data.max_seq_len;
+        // Allow configuring dropout from embedding node
+        if (node.data.dropout !== undefined) {
+          config.dropout = node.data.dropout;
         }
         break;
 
       // Positional encoding nodes (Transformer only)
       case 'rope':
         config.positional_encoding = 'rope';
-        // max_seq_len now configured from embedding node, not here
+        if (node.data.max_seq_len) {
+          config.max_seq_len = node.data.max_seq_len;
+        }
         break;
       case 'alibi':
         config.positional_encoding = 'alibi';
+        if (node.data.max_seq_len) {
+          config.max_seq_len = node.data.max_seq_len;
+        }
         break;
       case 'yarn':
         config.positional_encoding = 'yarn';
+        if (node.data.max_seq_len) {
+          config.max_seq_len = node.data.max_seq_len;
+        }
         break;
       case 'sinusoidal':
         config.positional_encoding = 'sinusoidal';
+        if (node.data.max_seq_len) {
+          config.max_seq_len = node.data.max_seq_len;
+        }
         break;
       case 'learned':
         config.positional_encoding = 'learned';
+        if (node.data.max_seq_len) {
+          config.max_seq_len = node.data.max_seq_len;
+        }
         break;
 
       // Attention nodes (Transformer only)
@@ -119,18 +134,21 @@ export const generateConfigFromNodes = (
         config.n_heads = node.data.n_heads || 14;
         config.n_kv_heads = node.data.n_heads || 14; // MHA has same number of KV heads as Q heads
         config.sliding_window = node.data.sliding_window || null;
+        config.attention_bias = node.data.attention_bias ?? false;
         break;
       case 'gqa':
         config.attention_type = 'gqa';
         config.n_heads = node.data.n_heads || 14;
         config.n_kv_heads = node.data.n_kv_heads || 2;
         config.sliding_window = node.data.sliding_window || null;
+        config.attention_bias = node.data.attention_bias ?? false;
         break;
       case 'mqa':
         config.attention_type = 'mqa';
         config.n_heads = node.data.n_heads || 14;
         config.n_kv_heads = 1; // MQA always uses 1 KV head
         config.sliding_window = node.data.sliding_window || null;
+        config.attention_bias = node.data.attention_bias ?? false;
         break;
       case 'mla':
         config.attention_type = 'mla';
@@ -138,14 +156,21 @@ export const generateConfigFromNodes = (
         config.sliding_window = node.data.sliding_window || null;
         config.d_latent = node.data.d_latent || null;
         config.d_rope_latent = node.data.d_rope_latent || null;
+        config.attention_bias = node.data.attention_bias ?? false;
         break;
 
       // Normalization nodes (both architectures)
       case 'rmsnorm':
         config.norm_type = 'rmsnorm';
+        if (node.data.norm_eps !== undefined) {
+          config.norm_eps = node.data.norm_eps;
+        }
         break;
       case 'layernorm':
         config.norm_type = 'layernorm';
+        if (node.data.norm_eps !== undefined) {
+          config.norm_eps = node.data.norm_eps;
+        }
         break;
 
       // FFN nodes (Transformer only)

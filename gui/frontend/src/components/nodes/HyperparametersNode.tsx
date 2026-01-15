@@ -8,6 +8,7 @@ interface HyperparametersNodeProps {
     batch_size?: number;
     gradient_accumulation_steps?: number;
     max_steps?: number;
+    weight_decay?: number;
     grad_clip?: number;
     eval_every?: number;
     eval_steps?: number;
@@ -32,6 +33,7 @@ export default memo(({ data }: HyperparametersNodeProps) => {
             {data.gradient_accumulation_steps && (
               <div>grad accum: {data.gradient_accumulation_steps}</div>
             )}
+            {data.weight_decay !== undefined && <div>weight decay: {data.weight_decay}</div>}
           </div>
         </div>
       </div>

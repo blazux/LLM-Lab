@@ -115,9 +115,10 @@ class TransformerLLM(nn.Module):
         self.norm = NormClass(config.d_model, eps=config.norm_eps)
         self.output_dropout = nn.Dropout(config.dropout)
 
-        # Output projection (weight tied with embedding)
+        # Output projection
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
-        self.lm_head.weight = self.token_embedding.weight
+        if config.tie_word_embeddings:
+            self.lm_head.weight = self.token_embedding.weight
 
         # Initialize weights
         self.apply(self._init_weights)
