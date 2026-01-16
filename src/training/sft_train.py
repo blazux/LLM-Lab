@@ -12,6 +12,7 @@ from config import ModelConfig, SFTConfig
 from model.factory import build_model
 from data import load_tokenizer, create_sft_dataset, sft_collate_fn
 from optimizers import setup_optimizer
+from training.report import TrainingReport
 
 
 def get_trend_indicator(current, previous):
@@ -355,6 +356,14 @@ def train_sft(config: SFTConfig, callback=None):
     prev_val_loss = None
     prev_val_acc = None
 
+    # Initialize training report
+    report = TrainingReport(
+        training_type="sft",
+        model_config=model_config,
+        training_config=config,
+        output_dir=config.output_dir,
+    )
+
     # Training loop
     print(f"\n🚀 Starting SFT training...")
     model.train()
@@ -427,9 +436,18 @@ def train_sft(config: SFTConfig, callback=None):
                 'lr': f'{optimizers[0].param_groups[0]["lr"]:.2e}'
             })
 
+            # Log to training report
+            current_lr = optimizers[0].param_groups[0]['lr']
+            report.log_step(
+                step=step,
+                loss=current_loss,
+                learning_rate=current_lr,
+                perplexity=perplexity,
+                accuracy=accuracy.item() if hasattr(accuracy, 'item') else accuracy,
+            )
+
             # Callback for metrics
             if callback and hasattr(callback, 'on_step'):
-                current_lr = optimizers[0].param_groups[0]['lr']
                 callback.on_step(step, current_loss, current_lr, perplexity)
 
         # Evaluation
@@ -448,6 +466,14 @@ def train_sft(config: SFTConfig, callback=None):
                   f"Val Loss {eval_metrics['val_loss']:.4f} {val_loss_trend}{best_marker} | "
                   f"Val Acc {eval_metrics['val_accuracy']:.1%} {val_acc_trend} | "
                   f"Val PPL {eval_metrics['val_perplexity']:.1f}")
+
+            # Log eval to training report
+            report.log_eval(
+                step=step,
+                loss=eval_metrics['val_loss'],
+                perplexity=eval_metrics['val_perplexity'],
+                accuracy=eval_metrics['val_accuracy'],
+            )
 
             # Update previous values
             prev_val_loss = eval_metrics['val_loss']
@@ -566,5 +592,21 @@ def train_sft(config: SFTConfig, callback=None):
 
     training_time = time.time() - start_time
     print(f"\n✅ SFT training completed in {training_time / 60:.1f} minutes")
+
+    # Generate training report PDF
+    checkpoint_path = f"{config.output_dir}/final_lora_adapters" if config.use_lora else f"{config.output_dir}/final_model.pt"
+    report.finalize(
+        final_metrics={
+            'final_loss': final_eval['val_loss'],
+            'final_perplexity': final_eval['val_perplexity'],
+            'final_accuracy': final_eval['val_accuracy'],
+            'best_val_loss': best_val_loss,
+            'training_time_minutes': training_time / 60,
+            'total_steps': step,
+        },
+        checkpoint_path=checkpoint_path,
+    )
+    pdf_path = report.generate_pdf()
+    print(f"📄 Training report saved: {pdf_path}")
 
     return model, final_eval

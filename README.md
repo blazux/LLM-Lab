@@ -108,7 +108,10 @@ Launch the CLI and you'll be greeted by a glorious retro menu:
   │ 7. Test model (inference)
   │    Play with your trained model
   │
-  │ 8. Exit
+  │ 8. Export to HuggingFace
+  │    Publish your model to HuggingFace Hub
+  │
+  │ 9. Exit
   │    Go outside, touch grass
 
 └──────────────────────────────────────────────────────────────┘
@@ -188,6 +191,96 @@ View everything about your checkpoints:
 ### 7. Merge LoRA Adapters (Option 5)
 Bake your LoRA weights into the base model. Essential for stacking training stages.
 
+### 8. Export to HuggingFace (Option 8)
+Publish your trained model to HuggingFace Hub with one click. The export automatically detects the best format based on your model configuration.
+
+## 🤗 HuggingFace Export & vLLM Compatibility
+
+Not all model configurations are created equal when it comes to inference tools. Here's what you need to know:
+
+### Export Format Detection
+
+| Architecture | Attention | Pos. Encoding | Activation | MoE | Export Format | vLLM Compatible |
+|--------------|-----------|---------------|------------|-----|---------------|-----------------|
+| Transformer | GQA | RoPE | SwiGLU | No | `llama` | ✅ **Yes** |
+| Transformer | MHA | RoPE | SwiGLU | No | `llama` | ✅ **Yes** |
+| Transformer | MQA | RoPE | SwiGLU | No | `llama` | ✅ **Yes** |
+| Transformer | GQA | RoPE | SwiGLU | Yes | `mixtral` | ✅ **Yes** |
+| Transformer | MLA | RoPE | SwiGLU | No | `custom` | ❌ No* |
+| Transformer | GQA | ALiBi | SwiGLU | No | `custom` | ❌ No* |
+| Transformer | GQA | Sinusoidal | SwiGLU | No | `custom` | ❌ No* |
+| Transformer | GQA | RoPE | GeGLU | No | `custom` | ❌ No* |
+| Mamba2 | N/A | N/A | N/A | N/A | `custom` | ❌ No* |
+
+*\*Custom format models require `trust_remote_code=True` when loading with transformers.*
+
+### What This Means
+
+**vLLM Compatible (`llama` / `mixtral` format):**
+- Native support in vLLM, TGI, and other inference servers
+- Optimized CUDA kernels for maximum throughput
+- No custom code needed to load
+- Just run: `vllm serve username/your-model`
+
+**Custom Format:**
+- Works with `transformers` library using `trust_remote_code=True`
+- Model code is bundled in the HuggingFace repo
+- Slower inference (no optimized kernels)
+- May not work with all inference tools
+
+### Recommended Configurations for Production
+
+If you want your model to be **vLLM compatible** for fast inference, use:
+```
+Architecture:        transformer
+Attention:           gqa (or mha)
+Positional Encoding: rope
+Activation:          swiglu
+MoE:                 false (or true for Mixtral-style)
+```
+
+This matches the Llama architecture and will export in a format that vLLM recognizes natively.
+
+### Setting Up HuggingFace Credentials
+
+To push models to HuggingFace Hub, you need an API token. Here are the options:
+
+**Option 1: Environment Variable (Recommended for Docker)**
+```bash
+# Add to your docker run command
+docker run -d -p 8000:8000 \
+  --gpus all \
+  -v $(pwd)/data:/app/data \
+  -e HF_TOKEN="hf_your_token_here" \
+  --name llm-lab \
+  blazux/llm-lab:latest
+```
+
+Or set it in your shell:
+```bash
+export HF_TOKEN="hf_your_token_here"
+# or
+export HUGGING_FACE_HUB_TOKEN="hf_your_token_here"
+```
+
+**Option 2: CLI Prompt**
+
+If no token is found, the CLI will ask for it:
+```
+⚠ No HF_TOKEN found in environment
+➤ HuggingFace API token (or press Enter to use cached):
+```
+
+**Option 3: HuggingFace CLI Login**
+
+If you've logged in before with the `huggingface-cli`, the cached token will be used automatically:
+```bash
+pip install huggingface_hub
+huggingface-cli login
+```
+
+> **Get your token at:** https://huggingface.co/settings/tokens (requires "Write" permission)
+
 ## 🛠️ Project Structure
 
 ```
@@ -218,6 +311,7 @@ LLM-Lab/
 - ✅ **Real-time Monitoring**: Watch loss curves in real-time
 - ✅ **Checkpoint Inspector**: Know everything about your models
 - ✅ **LoRA Merger**: Stack training stages like pancakes
+- ✅ **HuggingFace Export**: One-click publish to Hub (vLLM compatible!)
 
 ## 📚 Documentation (For When Things Inevitably Break)
 

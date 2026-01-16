@@ -12,6 +12,7 @@ from config import ModelConfig, TrainingConfig
 from model.factory import build_model
 from optimizers import setup_optimizer
 from data import StreamingTokenDataset, lm_collate_fn, load_tokenizer, create_token_stream
+from training.report import TrainingReport
 
 # Global stop flag for graceful training termination
 _stop_requested = False
@@ -338,6 +339,14 @@ def train_model(
         collate_fn=lm_collate_fn
     )
 
+    # Initialize training report
+    report = TrainingReport(
+        training_type="base",
+        model_config=model_config,
+        training_config=train_config,
+        output_dir=output_dir,
+    )
+
     # Training loop
     print(f"\n🚀 Starting training from step {start_step}...")
     if callback and hasattr(callback, 'on_log'):
@@ -420,6 +429,16 @@ def train_model(
                     'lr': f'{current_lr:.2e}'
                 })
 
+                # Log to training report
+                report.log_step(
+                    step=step,
+                    loss=current_loss,
+                    learning_rate=current_lr,
+                    perplexity=perplexity,
+                    accuracy=accuracy,
+                    tokens_seen=total_tokens_seen,
+                )
+
                 # Callback for metrics
                 if callback and hasattr(callback, 'on_step'):
                     callback.on_step(step, current_loss, current_lr, perplexity)
@@ -440,6 +459,14 @@ def train_model(
                       f"Val Loss {eval_metrics['val_loss']:.4f} {val_loss_trend}{best_marker} | "
                       f"Val Acc {eval_metrics['val_accuracy']:.1%} {val_acc_trend} | "
                       f"Val PPL {eval_metrics['val_perplexity']:.1f}")
+
+                # Log eval to training report
+                report.log_eval(
+                    step=step,
+                    loss=eval_metrics['val_loss'],
+                    perplexity=eval_metrics['val_perplexity'],
+                    accuracy=eval_metrics['val_accuracy'],
+                )
 
                 # Callback for evaluation
                 if callback and hasattr(callback, 'on_log'):
@@ -516,5 +543,12 @@ def train_model(
 
     training_time = time.time() - start_time
     print(f"\n✅ Training completed in {training_time / 60:.1f} minutes")
+
+    # Generate training report PDF
+    report.finalize(
+        final_metrics=final_eval,
+        checkpoint_path=f"{output_dir}/final_model.pt",
+    )
+    report.generate_pdf()
 
     return model, final_eval

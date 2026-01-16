@@ -12,6 +12,7 @@ from api.routes import router
 from api.training import router as training_router
 from api.inference import router as inference_router
 from api.merge import router as merge_router
+from api.export import router as export_router
 
 app = FastAPI(
     title="LLM Lab GUI API",
@@ -22,7 +23,7 @@ app = FastAPI(
 # CORS middleware to allow frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:8000"],  # Vite dev + Docker
+    allow_origins=["*"],  # Allow all origins (safe for local development)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,6 +34,7 @@ app.include_router(router, prefix="/api")
 app.include_router(training_router, prefix="/api/training", tags=["training"])
 app.include_router(inference_router, prefix="/api/inference", tags=["inference"])
 app.include_router(merge_router, prefix="/api/merge", tags=["merge"])
+app.include_router(export_router, prefix="/api/export", tags=["export"])
 
 # Check if built frontend exists (for Docker deployment)
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"

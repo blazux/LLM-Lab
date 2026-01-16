@@ -13,6 +13,7 @@ from typing import Optional
 from model.factory import build_model
 from config import RLHFConfig
 from data import load_tokenizer
+from training.report import TrainingReport
 
 
 def get_trend_indicator(current, previous):
@@ -442,6 +443,14 @@ def train_ppo(config: RLHFConfig, callback=None):
     # Create output directory
     os.makedirs(config.output_dir, exist_ok=True)
 
+    # Initialize training report
+    report = TrainingReport(
+        training_type="rlhf_ppo",
+        model_config=model_config,
+        training_config=config,
+        output_dir=config.output_dir,
+    )
+
     # Training loop
     print("\n" + "=" * 60)
     print("Starting training...")
@@ -562,11 +571,17 @@ def train_ppo(config: RLHFConfig, callback=None):
                       f"Entropy {entropy:.4f} {entropy_trend} | "
                       f"ETA: {eta_minutes:.1f}m")
 
+                # Log to training report
+                current_lr = optimizer.param_groups[0]['lr']
+                report.log_step(
+                    step=step,
+                    loss=policy_loss,
+                    learning_rate=current_lr,
+                    reward=mean_reward,
+                )
+
                 # Callback for metrics
                 if callback and hasattr(callback, 'on_step'):
-                    # Use policy loss as the main loss metric
-                    # Use a fixed LR or get from optimizer
-                    current_lr = optimizer.param_groups[0]['lr']
                     callback.on_step(step, policy_loss, current_lr, None)
 
                 # Update previous values
@@ -646,6 +661,23 @@ def train_ppo(config: RLHFConfig, callback=None):
         }, final_path)
         print(f"💾 Saved final model checkpoint: {final_path}")
 
+    training_time = time.time() - start_time
+
+    # Generate training report PDF
+    checkpoint_path = os.path.join(config.output_dir, "final_lora_adapters") if config.use_lora else os.path.join(config.output_dir, "final_model.pt")
+    report.finalize(
+        final_metrics={
+            'final_reward': prev_reward if prev_reward is not None else 0.0,
+            'final_policy_loss': prev_policy_loss if prev_policy_loss is not None else 0.0,
+            'training_time_minutes': training_time / 60,
+            'total_steps': step,
+            'algorithm': 'PPO',
+        },
+        checkpoint_path=checkpoint_path,
+    )
+    pdf_path = report.generate_pdf()
+    print(f"📄 Training report saved: {pdf_path}")
+
     print(f"\n✅ Training complete!")
     print(f"Total steps: {step}")
-    print(f"Total time: {(time.time() - start_time) / 60:.1f} minutes")
+    print(f"Total time: {training_time / 60:.1f} minutes")

@@ -90,7 +90,7 @@ def generate_text(
     for _ in range(max_tokens):
         # Get logits for next token
         with autocast(device_type="cuda", dtype=torch.bfloat16):
-            logits = model(input_ids)
+            logits, _ = model(input_ids)  # Model returns (logits, aux_loss)
 
         # Get logits for last position
         next_token_logits = logits[0, -1, :] / temperature

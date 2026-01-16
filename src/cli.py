@@ -73,7 +73,10 @@ def print_menu():
     print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}7.{Colors.RESET} {Colors.BOLD}Test model{Colors.RESET} {Colors.DIM}(inference){Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Test your self-trained model{Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}")
-    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}8.{Colors.RESET} {Colors.BOLD}Exit{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}8.{Colors.RESET} {Colors.BOLD}Export to HuggingFace{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Export model and push to HuggingFace Hub{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET}")
+    print(f"  {Colors.BOLD}│{Colors.RESET} {Colors.CYAN}9.{Colors.RESET} {Colors.BOLD}Exit{Colors.RESET}")
     print(f"  {Colors.BOLD}│{Colors.RESET}    {Colors.DIM}Close the application{Colors.RESET}")
 
     print(f"\n{Colors.BOLD}{Colors.WHITE}└{'─' * 78}┘{Colors.RESET}")
@@ -1683,13 +1686,138 @@ def start_rlhf_training():
         raise
 
 
+def export_to_huggingface():
+    """Export model to HuggingFace Hub"""
+    print_section_header("Export to HuggingFace", "📤")
+
+    # Import export module
+    try:
+        from export import export_to_hub, export_to_local, detect_export_format, ExportFormat
+    except ImportError as e:
+        print_error(f"Export module not available: {e}")
+        print_info("Make sure the export module is installed in src/export/")
+        return
+
+    # Get checkpoint path
+    print_subsection("Checkpoint Selection", "📁")
+    checkpoint_path = get_input(
+        "Checkpoint path",
+        default="/app/data/best_model.pt"
+    )
+
+    if not os.path.exists(checkpoint_path):
+        print_error(f"Checkpoint not found: {checkpoint_path}")
+        return
+
+    # Load checkpoint to detect format
+    import torch
+    print_info("Loading checkpoint to detect export format...")
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    model_config = checkpoint.get('model_config')
+
+    if model_config is None:
+        print_error("No model_config found in checkpoint")
+        return
+
+    # Detect export format
+    format_info = detect_export_format(model_config)
+
+    print(f"\n{Colors.BOLD}Detected Configuration:{Colors.RESET}")
+    print(f"  • Export format: {Colors.CYAN}{format_info.format.value}{Colors.RESET}")
+    print(f"  • Reason: {format_info.reason}")
+    print(f"  • vLLM compatible: {Colors.GREEN if format_info.vllm_compatible else Colors.YELLOW}{format_info.vllm_compatible}{Colors.RESET}")
+
+    # Export destination
+    print_subsection("Export Destination", "🎯")
+    print(f"\n  {Colors.CYAN}1.{Colors.RESET} Export to local directory")
+    print(f"  {Colors.CYAN}2.{Colors.RESET} Export and push to HuggingFace Hub")
+
+    dest_choice = get_input("\nDestination", default="1")
+
+    if dest_choice == "1":
+        # Local export
+        output_dir = get_input("Output directory", default="/app/data/hf_export")
+
+        # Model info
+        print_subsection("Model Information", "📝")
+        model_name = get_input("Model name", default="my-llm-lab-model")
+        model_description = get_input("Model description (optional)", default="")
+        license_type = get_input("License", default="apache-2.0")
+        author = get_input("Author (optional)", default="")
+
+        print_info("Exporting model...")
+
+        try:
+            export_to_local(
+                checkpoint_path=checkpoint_path,
+                output_dir=output_dir,
+                model_name=model_name,
+                model_description=model_description if model_description else None,
+                license_type=license_type,
+                author=author if author else None,
+            )
+            print_success(f"Model exported to: {output_dir}")
+        except Exception as e:
+            print_error(f"Export failed: {e}")
+            raise
+
+    else:
+        # Hub export
+        print_subsection("HuggingFace Hub Settings", "🤗")
+
+        repo_id = get_input("Repository ID (username/model-name)")
+        if not repo_id or '/' not in repo_id:
+            print_error("Invalid repo ID. Format: username/model-name")
+            return
+
+        # Check for token
+        token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        if not token:
+            print_warning("No HF_TOKEN found in environment")
+            token = get_input("HuggingFace API token (or press Enter to use cached)")
+            if not token:
+                token = None
+
+        private = get_input("Private repository? [y/n]", default="n").lower() in ['y', 'yes']
+
+        # Model info
+        print_subsection("Model Information", "📝")
+        model_description = get_input("Model description (optional)", default="")
+        license_type = get_input("License", default="apache-2.0")
+        author = get_input("Author (optional)", default="")
+
+        print_info(f"Exporting and pushing to {repo_id}...")
+
+        try:
+            url = export_to_hub(
+                checkpoint_path=checkpoint_path,
+                repo_id=repo_id,
+                token=token,
+                private=private,
+                model_name=repo_id,
+                model_description=model_description if model_description else None,
+                license_type=license_type,
+                author=author if author else None,
+            )
+            print_success(f"Model uploaded to: {url}")
+
+            if format_info.vllm_compatible:
+                print_info(f"vLLM command: vllm serve {repo_id}")
+            else:
+                print_warning("This model requires trust_remote_code=True to load")
+
+        except Exception as e:
+            print_error(f"Upload failed: {e}")
+            raise
+
+
 def main():
     """Main CLI loop"""
     print_header()
 
     while True:
         print_menu()
-        choice = input(f"\n{Colors.BOLD}➤{Colors.RESET} {Colors.WHITE}Enter your choice {Colors.DIM}(1-8){Colors.RESET}: ").strip()
+        choice = input(f"\n{Colors.BOLD}➤{Colors.RESET} {Colors.WHITE}Enter your choice {Colors.DIM}(1-9){Colors.RESET}: ").strip()
 
         if choice == "1":
             configure_model()
@@ -1706,12 +1834,14 @@ def main():
         elif choice == "7":
             start_inference()
         elif choice == "8":
+            export_to_huggingface()
+        elif choice == "9":
             print(f"\n{Colors.BOLD}{Colors.CYAN}{'─' * 60}{Colors.RESET}")
             print(f"{Colors.BOLD}{Colors.PURPLE}{'Thank you for using LLM-Laboratory!':^60}{Colors.RESET}")
             print(f"{Colors.BOLD}{Colors.CYAN}{'─' * 60}{Colors.RESET}\n")
             sys.exit(0)
         else:
-            print_error(f"Invalid choice: '{choice}'. Please enter a number between 1-8.")
+            print_error(f"Invalid choice: '{choice}'. Please enter a number between 1-9.")
 
 
 if __name__ == "__main__":
