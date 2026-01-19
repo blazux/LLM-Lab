@@ -551,4 +551,12 @@ def train_model(
     )
     report.generate_pdf()
 
-    return model, final_eval
+    # Clean up GPU memory
+    print("\n🧹 Cleaning up GPU memory...")
+    del model
+    del optimizers
+    del schedulers
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    print("   ✓ GPU memory freed")

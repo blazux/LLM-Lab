@@ -108,6 +108,15 @@ async def generate(request: GenerateRequest):
     try:
         # Load model (use cache if same checkpoint)
         if _model_cache["checkpoint_path"] != request.checkpoint_path:
+            # Clear old model from cache if exists
+            if _model_cache["model"] is not None:
+                print("Clearing previous model from memory...")
+                del _model_cache["model"]
+                del _model_cache["tokenizer"]
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+
             print(f"Loading model from {request.checkpoint_path}...")
             model, tokenizer, device = load_model_for_inference(request.checkpoint_path)
             _model_cache["checkpoint_path"] = request.checkpoint_path

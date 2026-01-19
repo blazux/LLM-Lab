@@ -15,8 +15,10 @@ class SFTConfig:
     validation_splits: Optional[List[str]] = None  # Optional: specify validation split names to try (e.g., ["validation", "val"])
 
     # Training Hyperparameters
-    batch_size: int = 4
-    gradient_accumulation_steps: int = 16
+    # Note: batch_size=1 with high gradient_accumulation is more memory efficient
+    # Effective batch size = batch_size * gradient_accumulation_steps = 1 * 32 = 32
+    batch_size: int = 1
+    gradient_accumulation_steps: int = 32
     max_steps: int = 5000
     learning_rate: float = 5e-6
     weight_decay: float = 0.01
@@ -54,6 +56,9 @@ class SFTConfig:
 
     # Output
     output_dir: str = "/app/data"
+
+    # Model Override
+    dropout: Optional[float] = None  # Override model dropout (None = use checkpoint default)
 
     # LoRA Configuration (Parameter-Efficient Fine-Tuning)
     use_lora: bool = False

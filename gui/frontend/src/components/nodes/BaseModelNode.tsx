@@ -6,6 +6,7 @@ interface BaseModelNodeProps {
   data: {
     label: string;
     checkpoint_path?: string;
+    dropout?: number;
   };
 }
 
@@ -43,6 +44,11 @@ export default memo(({ data }: BaseModelNodeProps) => {
           <div className="text-blue-200 text-xs mt-1 truncate" title={displayPath}>
             {fileName}
           </div>
+          {data.dropout !== undefined && (
+            <div className="text-blue-200 text-xs mt-0.5">
+              Dropout: {data.dropout}
+            </div>
+          )}
         </div>
       </div>
       {/* Top handle connects to optimizer/LoRA chain */}

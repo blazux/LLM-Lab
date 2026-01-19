@@ -680,4 +680,16 @@ def train_ppo(config: RLHFConfig, callback=None):
 
     print(f"\n✅ Training complete!")
     print(f"Total steps: {step}")
+
+    # Clean up GPU memory
+    print("\n🧹 Cleaning up GPU memory...")
+    del policy_model
+    del value_model
+    del ref_model
+    del reward_model
+    del optimizer
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    print("   ✓ GPU memory freed")
     print(f"Total time: {training_time / 60:.1f} minutes")

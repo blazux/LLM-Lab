@@ -8,6 +8,11 @@ from data import load_tokenizer
 
 def load_model_for_inference(checkpoint_path: str):
     """Load model from checkpoint for inference (supports both base and RLHF models)"""
+    # Clean up any existing GPU memory first
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
     # Detect model type

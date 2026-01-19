@@ -22,12 +22,6 @@ export default memo(({ data }: LoRANodeProps) => {
       className="px-6 py-4 shadow-lg rounded-xl bg-gradient-to-br from-purple-500 to-purple-700 border-2 border-purple-400 min-w-[220px]"
       style={{ cursor: 'grab' }}
     >
-      <Handle
-        type="target"
-        position={Position.Bottom}
-        className="!bg-purple-300"
-        style={{ width: 12, height: 12 }}
-      />
       <div className="flex items-center gap-3">
         <div className="text-3xl">🎯</div>
         <div className="flex-1">

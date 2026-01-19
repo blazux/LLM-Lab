@@ -2,10 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from torch.amp import autocast, GradScaler
+from torch.amp import autocast
 import math
 import time
 import os
+import gc
 from tqdm import tqdm
 
 from config import ModelConfig, SFTConfig
@@ -65,6 +66,16 @@ def evaluate_sft_model(model: nn.Module, val_loader: DataLoader, max_eval_steps:
             predictions = logits.argmax(dim=-1)
             total_correct += ((predictions == y) & (y != -100)).sum().item()
 
+            # Free memory after each eval batch
+            del x, y, logits, loss, predictions
+            if aux_loss is not None:
+                del aux_loss
+
+    # Clear CUDA cache after evaluation
+    if torch.cuda.is_available():
+        gc.collect()
+        torch.cuda.empty_cache()
+
     avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
     accuracy = total_correct / total_tokens if total_tokens > 0 else 0.0
     perplexity = math.exp(min(avg_loss, 20))
@@ -114,6 +125,13 @@ def setup_sft_scheduler(optimizer, config: SFTConfig):
     return scheduler
 
 
+def log_message(callback, message: str, level: str = "info"):
+    """Helper to log both to console and callback"""
+    print(message, flush=True)
+    if callback and hasattr(callback, 'on_log'):
+        callback.on_log(message, level)
+
+
 def train_sft(config: SFTConfig, callback=None):
     """
     Supervised Fine-Tuning training function
@@ -122,13 +140,19 @@ def train_sft(config: SFTConfig, callback=None):
         config: SFT configuration
         callback: Optional callback object with methods on_step, on_eval, on_log
     """
+    # Set memory-efficient CUDA allocation strategy
+    if torch.cuda.is_available():
+        # Help avoid memory fragmentation
+        os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+        torch.cuda.empty_cache()
+
     os.makedirs(config.output_dir, exist_ok=True)
 
     # Save configuration file for reproducibility
     config.save(f"{config.output_dir}/sft_config.json")
 
     # Load checkpoint to get model config and weights
-    print(f"\n🔄 Loading policy model from {config.policy_checkpoint}...")
+    log_message(callback, f"🔄 Loading policy model from {config.policy_checkpoint}...")
     if not os.path.exists(config.policy_checkpoint):
         raise FileNotFoundError(f"Policy checkpoint not found: {config.policy_checkpoint}")
 
@@ -144,8 +168,14 @@ def train_sft(config: SFTConfig, callback=None):
     if config.max_seq_len is None:
         config.max_seq_len = model_config.max_seq_len
 
+    # Override dropout if specified in SFT config
+    if config.dropout is not None:
+        original_dropout = model_config.dropout
+        model_config.dropout = config.dropout
+        print(f"   📝 Dropout override: {original_dropout} → {config.dropout}", flush=True)
+
     # Load tokenizer
-    print("\n📚 Loading tokenizer and datasets...")
+    log_message(callback, "📚 Loading tokenizer and datasets...")
     tokenizer = load_tokenizer(model_config.tokenizer_name)
 
     # Check for vocab size mismatch
@@ -169,12 +199,15 @@ def train_sft(config: SFTConfig, callback=None):
         print(f"      Split: {ds_split}")
 
     # Create SFT datasets (note: start_offset is NOT used - we start fresh with SFT data)
+    print("⏳ Creating training dataset...", flush=True)
+    ds_start = time.time()
     train_dataset = create_sft_dataset(
         config.datasets,
         tokenizer,
         config.max_seq_len,
         split="train"
     )
+    print(f"   ✓ Training dataset created in {time.time() - ds_start:.1f}s", flush=True)
 
     # For validation, try to use a validation split if available
     # Try common validation split names: validation, val, test
@@ -228,16 +261,19 @@ def train_sft(config: SFTConfig, callback=None):
 
     # If no validation split found, use train split
     if val_dataset is None:
-        print("⚠️  No validation split found, using training split for validation")
+        print("⚠️  No validation split found, using training split for validation", flush=True)
+        print("⏳ Creating validation dataset from training data...", flush=True)
+        val_ds_start = time.time()
         val_dataset = create_sft_dataset(
             config.datasets,
             tokenizer,
             config.max_seq_len,
             split="train"
         )
+        print(f"   ✓ Validation dataset created in {time.time() - val_ds_start:.1f}s", flush=True)
 
     # Create data loaders
-    print("\n📊 Creating data loaders...")
+    log_message(callback, "📊 Creating data loaders...")
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.batch_size,
@@ -249,13 +285,30 @@ def train_sft(config: SFTConfig, callback=None):
         collate_fn=sft_collate_fn
     )
 
+    # Pre-fetch first batch to initialize HuggingFace streaming connections
+    # This is where the actual network connections are established
+    print("⏳ Warming up data pipeline (connecting to HuggingFace)...", flush=True)
+    warmup_start = time.time()
+    train_iter = iter(train_loader)
+    first_batch = next(train_iter)
+    print(f"   ✓ Data pipeline ready in {time.time() - warmup_start:.1f}s", flush=True)
+
+    # Clear memory before loading model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     # Initialize model
-    print(f"\n🔧 Building {model_config.model_architecture} model...")
+    log_message(callback, f"🔧 Building {model_config.model_architecture} model...")
     model = build_model(model_config)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load model weights
     model.load_state_dict(checkpoint['model_state_dict'])
+
+    # Free checkpoint memory immediately after loading weights
+    del checkpoint
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     # Resize embeddings if vocab size mismatch
     if tokenizer_vocab_size != model_vocab_size:
@@ -310,7 +363,14 @@ def train_sft(config: SFTConfig, callback=None):
         model = apply_lora_to_model(model, model_config, lora_config_dict)
         print(f"   ✓ LoRA applied with preset: {config.lora_preset}")
 
-    model = model.to(device)
+    # Cast model to bfloat16 for memory efficiency (reduces memory usage by 50%)
+    model = model.to(device=device, dtype=torch.bfloat16)
+    print(f"   Model dtype: {next(model.parameters()).dtype}")
+
+    # Clear any memory fragments from model transfer
+    if torch.cuda.is_available():
+        gc.collect()
+        torch.cuda.empty_cache()
 
     total_params = model.count_parameters()
     print(f"   Total parameters: {total_params:,}")
@@ -345,8 +405,13 @@ def train_sft(config: SFTConfig, callback=None):
         scheduler = setup_sft_scheduler(optimizer, config)
         schedulers.append(scheduler)
 
-    # Setup gradient scaler for bfloat16
-    scaler = GradScaler()
+    # Note: GradScaler is NOT used with bfloat16 (only needed for float16)
+    # BFloat16 has same exponent range as float32, so no gradient scaling needed
+
+    # Clear cache after optimizer setup
+    if torch.cuda.is_available():
+        gc.collect()
+        torch.cuda.empty_cache()
 
     # Training state
     start_step = 0
@@ -365,29 +430,39 @@ def train_sft(config: SFTConfig, callback=None):
     )
 
     # Training loop
-    print(f"\n🚀 Starting SFT training...")
+    log_message(callback, "🚀 Starting SFT training...", "success")
     model.train()
     step = start_step
     start_time = time.time()
 
     pbar = tqdm(total=config.max_steps, desc="SFT Training", initial=step)
 
-    # Create an infinite iterator from the dataloader
-    train_iter = iter(train_loader)
+    # Use the pre-warmed iterator and first batch from earlier
+    # (train_iter and first_batch were created during data pipeline warmup)
+    use_prefetched = True
 
     while step < config.max_steps:
-        try:
-            x, y = next(train_iter)
-        except StopIteration:
-            # Restart iterator if we run out of data
-            train_iter = iter(train_loader)
-            x, y = next(train_iter)
+        if use_prefetched:
+            # Use the pre-fetched first batch
+            x, y = first_batch
+            del first_batch  # Free memory - no longer needed
+            use_prefetched = False
+        else:
+            try:
+                x, y = next(train_iter)
+            except StopIteration:
+                # Restart iterator if we run out of data
+                train_iter = iter(train_loader)
+                x, y = next(train_iter)
 
         x, y = x.to(device), y.to(device)
 
         # Forward pass with bfloat16
+        # Gradient checkpointing: only for transformers, not for Mamba2
+        # Mamba2's sequential scan + checkpointing recomputation uses more memory
+        use_checkpoint = (model_config.model_architecture == "transformer")
         with autocast(device_type="cuda", dtype=torch.bfloat16):
-            logits, aux_loss = model(x, use_checkpoint=True)
+            logits, aux_loss = model(x, use_checkpoint=use_checkpoint)
             # Ignore padding tokens (-100) in loss
             loss = F.cross_entropy(
                 logits.view(-1, model.config.vocab_size),
@@ -399,26 +474,27 @@ def train_sft(config: SFTConfig, callback=None):
                 loss = loss + aux_loss
             loss = loss / config.gradient_accumulation_steps
 
-        scaler.scale(loss).backward()
+        # No gradient scaling needed for bfloat16 (unlike float16)
+        loss.backward()
 
         # Optimizer step after accumulation
         if (step + 1) % config.gradient_accumulation_steps == 0:
-            for optimizer in optimizers:
-                scaler.unscale_(optimizer)
-
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 model.parameters(),
                 config.max_grad_norm
             )
 
             for optimizer in optimizers:
-                scaler.step(optimizer)
+                optimizer.step()
                 optimizer.zero_grad()
 
             for scheduler in schedulers:
                 scheduler.step()
 
-            scaler.update()
+            # Periodic cache clearing to prevent memory fragmentation (every 50 steps)
+            if step % 50 == 0 and torch.cuda.is_available():
+                gc.collect()
+                torch.cuda.empty_cache()
 
         # Logging
         if step % config.log_every == 0:
@@ -428,6 +504,8 @@ def train_sft(config: SFTConfig, callback=None):
                 accuracy = ((predictions == y) & valid_mask).float().sum() / valid_mask.float().sum()
                 current_loss = loss.item() * config.gradient_accumulation_steps
                 perplexity = math.exp(min(current_loss, 20))
+                # Free logits memory after logging
+                del predictions, valid_mask
 
             pbar.set_postfix({
                 'loss': f'{current_loss:.4f}',
@@ -450,8 +528,15 @@ def train_sft(config: SFTConfig, callback=None):
             if callback and hasattr(callback, 'on_step'):
                 callback.on_step(step, current_loss, current_lr, perplexity)
 
+        # Free memory from this step's tensors
+        del x, y, logits, loss
+
         # Evaluation
         if step % config.eval_every == 0 and step > 0:
+            # Clear memory before evaluation to ensure space for eval batches
+            if torch.cuda.is_available():
+                gc.collect()
+                torch.cuda.empty_cache()
             eval_metrics = evaluate_sft_model(model, val_loader, config.eval_steps)
 
             # Get trend indicators
@@ -503,8 +588,10 @@ def train_sft(config: SFTConfig, callback=None):
                     print(f"   💾 Best LoRA adapters saved: {config.output_dir}/best_lora_adapters")
                 else:
                     # For full fine-tuning: save complete checkpoint
+                    # Move state dicts to CPU to avoid doubling GPU memory usage
+                    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
                     checkpoint_data = {
-                        'model_state_dict': model.state_dict(),
+                        'model_state_dict': model_state,
                         'optimizer_states': [opt.state_dict() for opt in optimizers],
                         'scheduler_states': [sch.state_dict() for sch in schedulers],
                         'model_config': model_config,
@@ -515,9 +602,15 @@ def train_sft(config: SFTConfig, callback=None):
                     }
 
                     torch.save(checkpoint_data, f"{config.output_dir}/best_model.pt")
+                    del model_state, checkpoint_data  # Free CPU memory
 
                     print(f"\n   ✨ New best validation loss: {best_val_loss:.4f}")
                     print(f"   💾 Best model saved: {config.output_dir}/best_model.pt")
+
+            # Clear CUDA cache after evaluation to free memory
+            if torch.cuda.is_available():
+                gc.collect()
+                torch.cuda.empty_cache()
 
             # Save checkpoint periodically
             if not config.save_best_only and step % config.save_every == 0:
@@ -538,8 +631,10 @@ def train_sft(config: SFTConfig, callback=None):
                         json.dump(metadata, f, indent=2, default=str)
                 else:
                     # For full fine-tuning: save complete checkpoint
+                    # Move state dicts to CPU to avoid doubling GPU memory usage
+                    model_state = {k: v.cpu() for k, v in model.state_dict().items()}
                     checkpoint_data = {
-                        'model_state_dict': model.state_dict(),
+                        'model_state_dict': model_state,
                         'optimizer_states': [opt.state_dict() for opt in optimizers],
                         'scheduler_states': [sch.state_dict() for sch in schedulers],
                         'model_config': model_config,
@@ -548,6 +643,7 @@ def train_sft(config: SFTConfig, callback=None):
                         'eval_metrics': eval_metrics
                     }
                     torch.save(checkpoint_data, f"{config.output_dir}/checkpoint_step_{step}.pt")
+                    del model_state, checkpoint_data  # Free CPU memory
 
         step += 1
         pbar.update(1)
@@ -579,8 +675,10 @@ def train_sft(config: SFTConfig, callback=None):
             json.dump(metadata, f, indent=2, default=str)
     else:
         # For full fine-tuning: save complete checkpoint
+        # Move state dicts to CPU to avoid doubling GPU memory usage
+        model_state = {k: v.cpu() for k, v in model.state_dict().items()}
         torch.save({
-            'model_state_dict': model.state_dict(),
+            'model_state_dict': model_state,
             'optimizer_states': [opt.state_dict() for opt in optimizers],
             'scheduler_states': [sch.state_dict() for sch in schedulers],
             'model_config': model_config,
@@ -588,10 +686,11 @@ def train_sft(config: SFTConfig, callback=None):
             'step': step,
             'final_metrics': final_eval
         }, f"{config.output_dir}/final_model.pt")
+        del model_state  # Free CPU memory
         print(f"💾 Saved final model checkpoint")
 
     training_time = time.time() - start_time
-    print(f"\n✅ SFT training completed in {training_time / 60:.1f} minutes")
+    log_message(callback, f"✅ SFT training completed in {training_time / 60:.1f} minutes", "success")
 
     # Generate training report PDF
     checkpoint_path = f"{config.output_dir}/final_lora_adapters" if config.use_lora else f"{config.output_dir}/final_model.pt"
@@ -609,4 +708,12 @@ def train_sft(config: SFTConfig, callback=None):
     pdf_path = report.generate_pdf()
     print(f"📄 Training report saved: {pdf_path}")
 
-    return model, final_eval
+    # Clean up GPU memory
+    print("\n🧹 Cleaning up GPU memory...")
+    del model
+    del optimizers
+    del schedulers
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    print("   ✓ GPU memory freed")

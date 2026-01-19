@@ -115,11 +115,89 @@ const SFTCanvas = ({
         y: event.clientY,
       });
 
+      // Set default data based on node type
+      let nodeData: any = { label };
+
+      switch (type) {
+        case 'dataset':
+          nodeData = {
+            label,
+            dataset_name: 'yahma/alpaca-cleaned',
+            split: 'train',
+            weight: 1.0
+          };
+          break;
+        case 'muon':
+          nodeData = {
+            label,
+            lr: 0.02,
+            momentum: 0.95,
+            nesterov: true
+          };
+          break;
+        case 'adamw':
+          nodeData = {
+            label,
+            lr: 5e-6,
+            beta1: 0.9,
+            beta2: 0.999,
+            eps: 1e-8
+          };
+          break;
+        case 'lion':
+          nodeData = {
+            label,
+            lr: 1e-5,
+            beta1: 0.9,
+            beta2: 0.99
+          };
+          break;
+        case 'sophia':
+          nodeData = {
+            label,
+            lr: 1e-5,
+            beta1: 0.965,
+            beta2: 0.99,
+            rho: 0.04
+          };
+          break;
+        case 'hyperparams':
+          nodeData = {
+            label,
+            batch_size: 1,  // Lower batch size for memory efficiency
+            gradient_accumulation_steps: 32,  // Higher accumulation to maintain effective batch size
+            max_steps: 5000,
+            warmup_steps: 100,
+            eval_every: 500,
+            eval_steps: 50,
+            grad_clip: 1.0
+          };
+          break;
+        case 'lora':
+          nodeData = {
+            label,
+            preset: 'minimal',
+            lora_r: 8,
+            lora_alpha: 16,
+            lora_dropout: 0.05
+          };
+          break;
+        case 'cosine':
+        case 'linear':
+        case 'polynomial':
+        case 'constant':
+          nodeData = {
+            label,
+            warmup_steps: 100
+          };
+          break;
+      }
+
       const newNode: Node = {
         id: `${type}-${Date.now()}`,
         type,
         position,
-        data: { label },
+        data: nodeData,
       };
 
       setNodes((nds) => nds.concat(newNode));
@@ -131,15 +209,28 @@ const SFTCanvas = ({
     (params: Connection) => {
       if (!params.source || !params.target) return;
 
+      // Find source node to determine connection type
+      const sourceNode = nodes.find(n => n.id === params.source);
+      const targetNode = nodes.find(n => n.id === params.target);
+
+      // Determine target handle based on node types
+      let targetHandle = params.targetHandle;
+      if (sourceNode?.type === 'lora' && targetNode?.type === 'basemodel') {
+        // LoRA connects to bottom of base model
+        targetHandle = 'bottom';
+      }
+
       const newEdge: Edge = {
         id: `e${params.source}-${params.target}`,
         source: params.source,
         target: params.target,
+        sourceHandle: params.sourceHandle,
+        targetHandle: targetHandle,
       };
 
       setEdges((eds) => [...eds, newEdge]);
     },
-    [setEdges]
+    [setEdges, nodes]
   );
 
   const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
@@ -190,7 +281,7 @@ const SFTCanvas = ({
       const datasets = datasetNodes.map(node => ({
         name: node.data.dataset_name || 'HuggingFaceH4/ultrachat_200k',
         subset: node.data.subset,
-        split: node.data.split || 'train_sft',
+        split: node.data.split || 'train',
         weight: node.data.weight || 1.0
       }));
 
@@ -199,10 +290,10 @@ const SFTCanvas = ({
         policy_checkpoint: baseModelNode.data.checkpoint_path || '/app/data/best_model.pt',
         datasets: datasets,
         optimizer: optimizerNode.type || 'adamw',
-        lr: optimizerNode.data.lr || hyperparamsNode?.data.lr || 5e-6,
+        learning_rate: optimizerNode.data.lr || hyperparamsNode?.data.lr || 5e-6,
         weight_decay: optimizerNode.data.weight_decay || hyperparamsNode?.data.weight_decay || 0.01,
-        batch_size: hyperparamsNode?.data.batch_size || 4,
-        gradient_accumulation_steps: hyperparamsNode?.data.gradient_accumulation_steps || 16,
+        batch_size: hyperparamsNode?.data.batch_size || 1,
+        gradient_accumulation_steps: hyperparamsNode?.data.gradient_accumulation_steps || 32,
         max_steps: hyperparamsNode?.data.max_steps || 5000,
         warmup_steps: hyperparamsNode?.data.warmup_steps || schedulerNode?.data.warmup_steps || 100,
         scheduler: schedulerNode?.type || 'cosine',
@@ -213,6 +304,8 @@ const SFTCanvas = ({
         eval_steps: hyperparamsNode?.data.eval_steps || 50,
         save_best_only: true,
         output_dir: '/app/data',
+        // Model override
+        dropout: baseModelNode.data.dropout,
         // LoRA configuration (optional - enabled if node exists)
         use_lora: loraNode ? true : false,
         lora_preset: loraNode?.data.preset || 'minimal',

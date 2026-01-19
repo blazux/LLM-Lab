@@ -110,7 +110,7 @@ class SFTRequest(BaseModel):
     policy_checkpoint: str
     datasets: List[Dict[str, Any]]
     optimizer: str
-    lr: float
+    learning_rate: float
     weight_decay: float
     batch_size: int
     gradient_accumulation_steps: int
@@ -124,6 +124,9 @@ class SFTRequest(BaseModel):
     eval_steps: int
     save_best_only: bool
     output_dir: str
+    # Model override
+    dropout: Optional[float] = None
+    # LoRA configuration
     use_lora: bool
     lora_preset: Optional[str] = "minimal"
     lora_target_modules: Optional[List[str]] = None
@@ -413,7 +416,7 @@ def run_sft(sft_config_dict: Dict):
 
         # Run actual SFT training with callback
         train_sft(
-            sft_config=sft_config,
+            config=sft_config,
             callback=callback
         )
 
@@ -613,7 +616,7 @@ def run_rlhf(rlhf_config_dict: Dict):
 
         # Run actual RLHF training with callback
         train_rlhf(
-            rlhf_config=rlhf_config,
+            config=rlhf_config,
             callback=callback
         )
 

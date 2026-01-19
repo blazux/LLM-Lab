@@ -91,7 +91,7 @@ export interface SFTConfigData {
     weight: number;
   }>;
   optimizer: string;
-  lr: number;
+  learning_rate: number;
   weight_decay: number;
   batch_size: number;
   gradient_accumulation_steps: number;
@@ -105,6 +105,8 @@ export interface SFTConfigData {
   eval_steps: number;
   save_best_only: boolean;
   output_dir: string;
+  // Model override
+  dropout?: number;
   // LoRA configuration
   use_lora: boolean;
   lora_preset?: string;

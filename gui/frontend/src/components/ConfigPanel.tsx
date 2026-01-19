@@ -1631,6 +1631,29 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 </>
               )}
             </div>
+
+            {/* Dropout Override */}
+            <div className="border-t border-slate-600 pt-4 mt-4">
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Dropout Override
+              </label>
+              <select
+                value={node.data.dropout ?? ''}
+                onChange={(e) => handleChange('dropout', e.target.value === '' ? undefined : parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Use checkpoint default</option>
+                <option value="0">0 (no dropout)</option>
+                <option value="0.01">0.01</option>
+                <option value="0.05">0.05</option>
+                <option value="0.1">0.1</option>
+                <option value="0.15">0.15</option>
+                <option value="0.2">0.2</option>
+              </select>
+              <p className="text-xs text-slate-400 mt-1">
+                Override model dropout for SFT (base training often uses 0)
+              </p>
+            </div>
           </div>
         );
 
