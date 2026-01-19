@@ -6,7 +6,6 @@ from torch.amp import autocast
 import math
 import time
 import os
-import gc
 from tqdm import tqdm
 
 from config import ModelConfig, SFTConfig
@@ -65,16 +64,6 @@ def evaluate_sft_model(model: nn.Module, val_loader: DataLoader, max_eval_steps:
 
             predictions = logits.argmax(dim=-1)
             total_correct += ((predictions == y) & (y != -100)).sum().item()
-
-            # Free memory after each eval batch
-            del x, y, logits, loss, predictions
-            if aux_loss is not None:
-                del aux_loss
-
-    # Clear CUDA cache after evaluation
-    if torch.cuda.is_available():
-        gc.collect()
-        torch.cuda.empty_cache()
 
     avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
     accuracy = total_correct / total_tokens if total_tokens > 0 else 0.0
@@ -177,6 +166,13 @@ def train_sft(config: SFTConfig, callback=None):
     # Load tokenizer
     log_message(callback, "📚 Loading tokenizer and datasets...")
     tokenizer = load_tokenizer(model_config.tokenizer_name)
+
+    # Add chat special tokens for SFT
+    chat_special_tokens = ["<|user|>", "<|assistant|>", "<|system|>", "<|end|>"]
+    special_tokens_dict = {"additional_special_tokens": chat_special_tokens}
+    num_added = tokenizer.add_special_tokens(special_tokens_dict)
+    if num_added > 0:
+        print(f"   ✓ Added {num_added} chat special tokens: {chat_special_tokens}")
 
     # Check for vocab size mismatch
     tokenizer_vocab_size = len(tokenizer)
@@ -311,15 +307,23 @@ def train_sft(config: SFTConfig, callback=None):
         torch.cuda.empty_cache()
 
     # Resize embeddings if vocab size mismatch
+    # Use max of len(tokenizer) and max_special_id+1 to ensure all token IDs fit
+    # (HuggingFace can assign special token IDs >= len(tokenizer))
+    max_special_id = max(tokenizer.all_special_ids) if tokenizer.all_special_ids else 0
+    required_vocab_size = max(tokenizer_vocab_size, max_special_id + 1)
+    if required_vocab_size != tokenizer_vocab_size:
+        tokenizer_vocab_size = required_vocab_size
+
     if tokenizer_vocab_size != model_vocab_size:
         print(f"\n🔧 Resizing embeddings from {model_vocab_size} to {tokenizer_vocab_size}...")
 
-        # Get old embeddings
+        # Get old embeddings and their device
         old_embeddings = model.token_embedding.weight.data
         old_vocab_size, embedding_dim = old_embeddings.shape
+        embed_device = old_embeddings.device
 
-        # Create new embedding layer with larger vocab
-        new_embedding = nn.Embedding(tokenizer_vocab_size, embedding_dim)
+        # Create new embedding layer with larger vocab (on same device)
+        new_embedding = nn.Embedding(tokenizer_vocab_size, embedding_dim, device=embed_device)
 
         # Copy old embeddings
         new_embedding.weight.data[:old_vocab_size] = old_embeddings
@@ -333,7 +337,7 @@ def train_sft(config: SFTConfig, callback=None):
 
         # Resize lm_head (output layer) as well since it's tied with embeddings
         old_lm_head_weight = model.lm_head.weight.data
-        new_lm_head = nn.Linear(embedding_dim, tokenizer_vocab_size, bias=False)
+        new_lm_head = nn.Linear(embedding_dim, tokenizer_vocab_size, bias=False, device=embed_device)
         new_lm_head.weight.data[:old_vocab_size] = old_lm_head_weight
         nn.init.normal_(new_lm_head.weight.data[old_vocab_size:], mean=0.0, std=0.02)
         model.lm_head = new_lm_head
@@ -366,11 +370,6 @@ def train_sft(config: SFTConfig, callback=None):
     # Cast model to bfloat16 for memory efficiency (reduces memory usage by 50%)
     model = model.to(device=device, dtype=torch.bfloat16)
     print(f"   Model dtype: {next(model.parameters()).dtype}")
-
-    # Clear any memory fragments from model transfer
-    if torch.cuda.is_available():
-        gc.collect()
-        torch.cuda.empty_cache()
 
     total_params = model.count_parameters()
     print(f"   Total parameters: {total_params:,}")
@@ -407,11 +406,6 @@ def train_sft(config: SFTConfig, callback=None):
 
     # Note: GradScaler is NOT used with bfloat16 (only needed for float16)
     # BFloat16 has same exponent range as float32, so no gradient scaling needed
-
-    # Clear cache after optimizer setup
-    if torch.cuda.is_available():
-        gc.collect()
-        torch.cuda.empty_cache()
 
     # Training state
     start_step = 0
@@ -488,13 +482,9 @@ def train_sft(config: SFTConfig, callback=None):
                 optimizer.step()
                 optimizer.zero_grad()
 
-            for scheduler in schedulers:
-                scheduler.step()
-
-            # Periodic cache clearing to prevent memory fragmentation (every 50 steps)
-            if step % 50 == 0 and torch.cuda.is_available():
-                gc.collect()
-                torch.cuda.empty_cache()
+        # Step scheduler every iteration (not just after gradient accumulation)
+        for scheduler in schedulers:
+            scheduler.step()
 
         # Logging
         if step % config.log_every == 0:
@@ -504,8 +494,6 @@ def train_sft(config: SFTConfig, callback=None):
                 accuracy = ((predictions == y) & valid_mask).float().sum() / valid_mask.float().sum()
                 current_loss = loss.item() * config.gradient_accumulation_steps
                 perplexity = math.exp(min(current_loss, 20))
-                # Free logits memory after logging
-                del predictions, valid_mask
 
             pbar.set_postfix({
                 'loss': f'{current_loss:.4f}',
@@ -528,15 +516,8 @@ def train_sft(config: SFTConfig, callback=None):
             if callback and hasattr(callback, 'on_step'):
                 callback.on_step(step, current_loss, current_lr, perplexity)
 
-        # Free memory from this step's tensors
-        del x, y, logits, loss
-
         # Evaluation
         if step % config.eval_every == 0 and step > 0:
-            # Clear memory before evaluation to ensure space for eval batches
-            if torch.cuda.is_available():
-                gc.collect()
-                torch.cuda.empty_cache()
             eval_metrics = evaluate_sft_model(model, val_loader, config.eval_steps)
 
             # Get trend indicators
@@ -559,6 +540,10 @@ def train_sft(config: SFTConfig, callback=None):
                 perplexity=eval_metrics['val_perplexity'],
                 accuracy=eval_metrics['val_accuracy'],
             )
+
+            # Callback for eval metrics (for GUI monitor)
+            if callback and hasattr(callback, 'on_eval'):
+                callback.on_eval(step, eval_metrics['val_loss'], eval_metrics['val_perplexity'])
 
             # Update previous values
             prev_val_loss = eval_metrics['val_loss']
@@ -601,16 +586,11 @@ def train_sft(config: SFTConfig, callback=None):
                         'eval_metrics': eval_metrics
                     }
 
-                    torch.save(checkpoint_data, f"{config.output_dir}/best_model.pt")
+                    torch.save(checkpoint_data, f"{config.output_dir}/sft_best_model.pt")
                     del model_state, checkpoint_data  # Free CPU memory
 
                     print(f"\n   ✨ New best validation loss: {best_val_loss:.4f}")
-                    print(f"   💾 Best model saved: {config.output_dir}/best_model.pt")
-
-            # Clear CUDA cache after evaluation to free memory
-            if torch.cuda.is_available():
-                gc.collect()
-                torch.cuda.empty_cache()
+                    print(f"   💾 Best model saved: {config.output_dir}/sft_best_model.pt")
 
             # Save checkpoint periodically
             if not config.save_best_only and step % config.save_every == 0:
@@ -685,7 +665,7 @@ def train_sft(config: SFTConfig, callback=None):
             'sft_config': config,
             'step': step,
             'final_metrics': final_eval
-        }, f"{config.output_dir}/final_model.pt")
+        }, f"{config.output_dir}/sft_final_model.pt")
         del model_state  # Free CPU memory
         print(f"💾 Saved final model checkpoint")
 
@@ -693,7 +673,7 @@ def train_sft(config: SFTConfig, callback=None):
     log_message(callback, f"✅ SFT training completed in {training_time / 60:.1f} minutes", "success")
 
     # Generate training report PDF
-    checkpoint_path = f"{config.output_dir}/final_lora_adapters" if config.use_lora else f"{config.output_dir}/final_model.pt"
+    checkpoint_path = f"{config.output_dir}/final_lora_adapters" if config.use_lora else f"{config.output_dir}/sft_final_model.pt"
     report.finalize(
         final_metrics={
             'final_loss': final_eval['val_loss'],

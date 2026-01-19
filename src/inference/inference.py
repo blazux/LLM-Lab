@@ -31,8 +31,13 @@ def load_model_for_inference(checkpoint_path: str):
     # Load tokenizer and validate vocab_size
     tokenizer = load_tokenizer(model_config.tokenizer_name)
 
-    if model_config.vocab_size != tokenizer.vocab_size:
-        print(f"   ⚠️  WARNING: Checkpoint vocab_size ({model_config.vocab_size}) != tokenizer vocab_size ({tokenizer.vocab_size})")
+    # Add chat special tokens (must match SFT training)
+    if is_sft or is_rlhf:
+        chat_special_tokens = ["<|user|>", "<|assistant|>", "<|system|>", "<|end|>"]
+        tokenizer.add_special_tokens({"additional_special_tokens": chat_special_tokens})
+
+    if model_config.vocab_size != len(tokenizer):
+        print(f"   ⚠️  WARNING: Checkpoint vocab_size ({model_config.vocab_size}) != tokenizer vocab_size ({len(tokenizer)})")
         print(f"   This indicates a tokenizer mismatch. Generation quality may be poor.")
         print(f"   Check that tokenizer_name in config matches the one used during training.")
 
@@ -218,14 +223,9 @@ def interactive_inference(checkpoint_path: str):
         print("=" * 60 + "\n")
 
         # Apply chat template if this is a chat model
-        if is_chat_model and hasattr(tokenizer, 'apply_chat_template'):
-            # Format as chat message
-            messages = [{"role": "user", "content": prompt}]
-            formatted_prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
+        if is_chat_model:
+            # Use custom chat format matching SFT training
+            formatted_prompt = f"<|user|>{prompt}<|end|>\n<|assistant|>"
         else:
             formatted_prompt = prompt
 
