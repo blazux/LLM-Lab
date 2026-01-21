@@ -34,18 +34,29 @@ def load_model_for_inference(checkpoint_path: str):
     # Add chat special tokens (must match SFT training)
     if is_sft or is_rlhf:
         chat_special_tokens = ["<|user|>", "<|assistant|>", "<|system|>", "<|end|>"]
-        tokenizer.add_special_tokens({"additional_special_tokens": chat_special_tokens})
+        num_added = tokenizer.add_special_tokens({"additional_special_tokens": chat_special_tokens})
+        print(f"   Added {num_added} chat special tokens")
+        # Verify special tokens are recognized
+        for tok in chat_special_tokens:
+            tok_id = tokenizer.convert_tokens_to_ids(tok)
+            print(f"      {tok} -> ID {tok_id}")
 
-    if model_config.vocab_size != len(tokenizer):
-        print(f"   ⚠️  WARNING: Checkpoint vocab_size ({model_config.vocab_size}) != tokenizer vocab_size ({len(tokenizer)})")
-        print(f"   This indicates a tokenizer mismatch. Generation quality may be poor.")
-        print(f"   Check that tokenizer_name in config matches the one used during training.")
+    # Match the vocab size adjustment from SFT training
+    tokenizer_vocab_size = len(tokenizer)
+    max_special_id = max(tokenizer.all_special_ids) if tokenizer.all_special_ids else 0
+    effective_vocab_size = max(tokenizer_vocab_size, max_special_id + 1)
+
+    if model_config.vocab_size != effective_vocab_size:
+        print(f"   ⚠️  WARNING: Model vocab_size ({model_config.vocab_size}) != effective tokenizer vocab_size ({effective_vocab_size})")
+        print(f"   (len(tokenizer)={tokenizer_vocab_size}, max_special_id={max_special_id})")
+        print(f"   This may indicate a tokenizer mismatch.")
 
     model = build_model(model_config)
     model.load_state_dict(checkpoint['model_state_dict'])
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
+    # Convert to bfloat16 to match training and avoid dtype mismatch with autocast
+    model = model.to(device=device, dtype=torch.bfloat16)
     model.eval()
 
     # Print model information
@@ -94,6 +105,7 @@ def generate_text(
 
     # Tokenize prompt
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
+    prompt_length = input_ids.size(1)
 
     generated_tokens = input_ids[0].tolist()
 
@@ -161,8 +173,9 @@ def generate_text(
         if input_ids.size(1) > max_len:
             input_ids = input_ids[:, -max_len:]
 
-    # Decode
-    generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+    # Decode only the newly generated tokens (not the prompt)
+    new_tokens = generated_tokens[prompt_length:]
+    generated_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
     return generated_text
 
 
@@ -226,6 +239,12 @@ def interactive_inference(checkpoint_path: str):
         if is_chat_model:
             # Use custom chat format matching SFT training
             formatted_prompt = f"<|user|>{prompt}<|end|>\n<|assistant|>"
+            # Debug: show tokenization
+            debug_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=False)
+            print(f"DEBUG: Formatted prompt: {repr(formatted_prompt)}")
+            print(f"DEBUG: Token IDs: {debug_tokens[:20]}{'...' if len(debug_tokens) > 20 else ''}")
+            print(f"DEBUG: Decoded tokens: {[tokenizer.decode([t]) for t in debug_tokens[:10]]}")
+            print()
         else:
             formatted_prompt = prompt
 

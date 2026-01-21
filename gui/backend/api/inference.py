@@ -21,7 +21,8 @@ _model_cache = {
     "checkpoint_path": None,
     "model": None,
     "tokenizer": None,
-    "device": None
+    "device": None,
+    "is_chat_model": False
 }
 
 
@@ -118,19 +119,38 @@ async def generate(request: GenerateRequest):
                     torch.cuda.synchronize()
 
             print(f"Loading model from {request.checkpoint_path}...")
+
+            # Check if this is a chat model before loading
+            checkpoint = torch.load(request.checkpoint_path, map_location="cpu", weights_only=False)
+            is_chat_model = 'sft_config' in checkpoint or 'rlhf_config' in checkpoint
+            del checkpoint
+
             model, tokenizer, device = load_model_for_inference(request.checkpoint_path)
             _model_cache["checkpoint_path"] = request.checkpoint_path
             _model_cache["model"] = model
             _model_cache["tokenizer"] = tokenizer
             _model_cache["device"] = device
+            _model_cache["is_chat_model"] = is_chat_model
         else:
             print("Using cached model...")
             model = _model_cache["model"]
             tokenizer = _model_cache["tokenizer"]
             device = _model_cache["device"]
+            is_chat_model = _model_cache["is_chat_model"]
+
+        # Apply chat template if this is a chat model
+        if is_chat_model:
+            formatted_prompt = f"<|user|>{request.prompt}<|end|>\n<|assistant|>"
+            print(f"Applied chat template: {repr(formatted_prompt[:100])}...")
+            # Debug: verify tokenization
+            token_ids = tokenizer.encode(formatted_prompt)
+            print(f"Token IDs (first 15): {token_ids[:15]}")
+            print(f"Decoded tokens: {[tokenizer.decode([t]) for t in token_ids[:10]]}")
+        else:
+            formatted_prompt = request.prompt
 
         # Count prompt tokens
-        prompt_tokens = len(tokenizer.encode(request.prompt))
+        prompt_tokens = len(tokenizer.encode(formatted_prompt))
 
         # Generate text
         start_time = time.time()
@@ -138,7 +158,7 @@ async def generate(request: GenerateRequest):
             model=model,
             tokenizer=tokenizer,
             device=device,
-            prompt=request.prompt,
+            prompt=formatted_prompt,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             top_k=request.top_k,
@@ -148,9 +168,8 @@ async def generate(request: GenerateRequest):
         )
         end_time = time.time()
 
-        # Calculate stats
-        total_tokens = len(tokenizer.encode(generated_text))
-        tokens_generated = total_tokens - prompt_tokens
+        # Calculate stats (generated_text now only contains new tokens, not the prompt)
+        tokens_generated = len(tokenizer.encode(generated_text))
         generation_time = end_time - start_time
         tokens_per_second = tokens_generated / generation_time if generation_time > 0 else 0
 

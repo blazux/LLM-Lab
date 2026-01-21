@@ -194,29 +194,28 @@ class SFTDataset(IterableDataset):
 
                 # Process messages format
                 if messages:
-                    # Apply chat template if tokenizer supports it AND has a template set
-                    if hasattr(self.tokenizer, 'apply_chat_template') and getattr(self.tokenizer, 'chat_template', None):
-                        tokens = self.tokenizer.apply_chat_template(
-                            messages,
-                            truncation=True,
-                            max_length=self.max_seq_len,
-                            add_generation_prompt=False
-                        )
-                    else:
-                        # Fallback: concatenate messages with special tokens
-                        text = ""
-                        for msg in messages:
-                            role = msg.get('role', 'user')
-                            content = msg.get('content', '')
-                            if role == 'system':
-                                text += f"<|system|>{content}<|end|>\n"
-                            elif role == 'user':
+                    # Always use our custom chat template format with special tokens
+                    # This ensures consistency with loss masking (which looks for <|assistant|>, etc.)
+                    # and inference (which applies the same format)
+                    text = ""
+                    for msg in messages:
+                        role = msg.get('role', 'user')
+                        content = msg.get('content', '')
+                        if role == 'system':
+                            text += f"<|system|>{content}<|end|>\n"
+                        elif role == 'user':
+                            text += f"<|user|>{content}<|end|>\n"
+                        elif role == 'assistant':
+                            text += f"<|assistant|>{content}<|end|>\n"
+                        else:
+                            # Map other roles (human->user, gpt->assistant)
+                            if role in ('human',):
                                 text += f"<|user|>{content}<|end|>\n"
-                            elif role == 'assistant':
+                            elif role in ('gpt', 'bot'):
                                 text += f"<|assistant|>{content}<|end|>\n"
                             else:
-                                text += f"<|{role}|>{content}<|end|>\n"
-                        tokens = self.tokenizer.encode(text, add_special_tokens=True, truncation=True, max_length=self.max_seq_len)
+                                text += f"<|user|>{content}<|end|>\n"
+                    tokens = self.tokenizer.encode(text, add_special_tokens=True, truncation=True, max_length=self.max_seq_len)
 
                     if len(tokens) > 1:
                         yield torch.tensor(tokens, dtype=torch.long)
@@ -226,10 +225,13 @@ class SFTDataset(IterableDataset):
                 continue
 
 
-def sft_collate_fn(batch):
+def sft_collate_fn(batch, assistant_token_id=None, user_token_id=None, system_token_id=None):
     """
     Collate function for SFT
     Pads sequences to the same length and creates (input, target) pairs
+    Only computes loss on assistant responses, not user prompts
+
+    For multi-turn conversations, masks ALL user/system turns, not just the first one.
     """
     # Find max length in batch
     max_len = max(len(seq) for seq in batch)
@@ -250,8 +252,44 @@ def sft_collate_fn(batch):
     # Create input and target
     # Input: all tokens except the last
     # Target: all tokens except the first
-    x = batch_tensor[:, :-1].contiguous()
-    y = batch_tensor[:, 1:].contiguous()
+    # IMPORTANT: Use .clone() to avoid memory aliasing - otherwise modifying y also corrupts x
+    x = batch_tensor[:, :-1].clone()
+    y = batch_tensor[:, 1:].clone()
+
+    # Mask loss for non-assistant tokens (only train on assistant responses)
+    # For multi-turn conversations, we need to mask ALL user/system turns
+    if assistant_token_id is not None:
+        for i in range(y.size(0)):
+            seq_len = x.size(1)
+            # Start with all positions masked
+            mask = torch.ones(seq_len, dtype=torch.bool)
+
+            # Find all <|assistant|> token positions in the input sequence
+            assistant_positions = (x[i] == assistant_token_id).nonzero(as_tuple=True)[0].tolist()
+
+            # Find positions where we should stop computing loss (user/system tokens)
+            stop_positions = []
+            if user_token_id is not None:
+                user_positions = (x[i] == user_token_id).nonzero(as_tuple=True)[0].tolist()
+                stop_positions.extend(user_positions)
+            if system_token_id is not None:
+                system_positions = (x[i] == system_token_id).nonzero(as_tuple=True)[0].tolist()
+                stop_positions.extend(system_positions)
+            stop_positions = sorted(stop_positions)
+
+            # For each <|assistant|> token, unmask until the next user/system token
+            for asst_pos in assistant_positions:
+                # Find the next stop position after this assistant token
+                next_stop = seq_len  # Default to end of sequence
+                for stop_pos in stop_positions:
+                    if stop_pos > asst_pos:
+                        next_stop = stop_pos
+                        break
+                # Unmask from assistant position to next stop (compute loss on assistant response)
+                mask[asst_pos:next_stop] = False
+
+            # Apply mask: set masked positions to -100 in targets
+            y[i, mask] = -100
 
     # Replace -100 in input with 0 (a valid token ID for embedding layer)
     # The model won't use these positions anyway since they're padding

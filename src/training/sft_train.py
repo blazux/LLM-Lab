@@ -6,6 +6,7 @@ from torch.amp import autocast
 import math
 import time
 import os
+from functools import partial
 from tqdm import tqdm
 
 from config import ModelConfig, SFTConfig
@@ -174,6 +175,12 @@ def train_sft(config: SFTConfig, callback=None):
     if num_added > 0:
         print(f"   ✓ Added {num_added} chat special tokens: {chat_special_tokens}")
 
+    # Get special token IDs for loss masking (only compute loss on assistant responses)
+    assistant_token_id = tokenizer.convert_tokens_to_ids("<|assistant|>")
+    user_token_id = tokenizer.convert_tokens_to_ids("<|user|>")
+    system_token_id = tokenizer.convert_tokens_to_ids("<|system|>")
+    print(f"   ✓ Token IDs for loss masking: assistant={assistant_token_id}, user={user_token_id}, system={system_token_id}")
+
     # Check for vocab size mismatch
     tokenizer_vocab_size = len(tokenizer)
     model_vocab_size = model_config.vocab_size
@@ -268,17 +275,23 @@ def train_sft(config: SFTConfig, callback=None):
         )
         print(f"   ✓ Validation dataset created in {time.time() - val_ds_start:.1f}s", flush=True)
 
-    # Create data loaders
+    # Create data loaders with loss masking for assistant responses only
     log_message(callback, "📊 Creating data loaders...")
+    collate_with_masking = partial(
+        sft_collate_fn,
+        assistant_token_id=assistant_token_id,
+        user_token_id=user_token_id,
+        system_token_id=system_token_id
+    )
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.batch_size,
-        collate_fn=sft_collate_fn
+        collate_fn=collate_with_masking
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.batch_size,
-        collate_fn=sft_collate_fn
+        collate_fn=collate_with_masking
     )
 
     # Pre-fetch first batch to initialize HuggingFace streaming connections
@@ -542,8 +555,11 @@ def train_sft(config: SFTConfig, callback=None):
             )
 
             # Callback for eval metrics (for GUI monitor)
-            if callback and hasattr(callback, 'on_eval'):
-                callback.on_eval(step, eval_metrics['val_loss'], eval_metrics['val_perplexity'])
+            if callback:
+                if hasattr(callback, 'on_log'):
+                    callback.on_log(f"Step {step}: Val Loss={eval_metrics['val_loss']:.4f}, Val PPL={eval_metrics['val_perplexity']:.1f}", "info")
+                if hasattr(callback, 'on_eval'):
+                    callback.on_eval(step, eval_metrics['val_loss'], eval_metrics['val_perplexity'])
 
             # Update previous values
             prev_val_loss = eval_metrics['val_loss']
