@@ -368,8 +368,16 @@ class TrainingConfig:
     sophia_rho: float = 0.04
 
     # Scheduler
-    scheduler: str = "cosine"
+    scheduler: str = "cosine"  # "cosine", "linear", "polynomial", "constant", or "adaptive"
     warmup_steps: int = 1000
+
+    # Adaptive scheduler parameters (only used when scheduler="adaptive")
+    adaptive_window: int = 10  # Number of eval steps to consider for trend
+    adaptive_increase_factor: float = 1.05  # Multiply LR by this when loss decreasing well
+    adaptive_decrease_factor: float = 0.9  # Multiply LR by this when loss plateauing/increasing
+    adaptive_patience: int = 3  # Wait this many evals before adjusting LR again
+    adaptive_min_lr: float = 1e-6  # Minimum learning rate
+    adaptive_threshold: float = 0.01  # Min relative improvement to be considered "decreasing"
 
     # Batch and accumulation
     batch_size: int = 1

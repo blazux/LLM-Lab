@@ -6,13 +6,216 @@ from torch.amp import autocast, GradScaler
 import math
 import time
 import os
+import logging
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 from config import ModelConfig, TrainingConfig
 from model.factory import build_model
 from optimizers import setup_optimizer
 from data import StreamingTokenDataset, lm_collate_fn, load_tokenizer, create_token_stream
 from training.report import TrainingReport
+
+
+class AdaptiveLRScheduler:
+    """
+    Adaptive Learning Rate Scheduler that adjusts LR based on loss trends.
+
+    Unlike fixed schedules (cosine, linear), this scheduler observes the actual
+    training dynamics and adjusts accordingly:
+
+    - If loss is decreasing well → slightly increase LR (we can go faster)
+    - If loss is plateauing → decrease LR (need finer updates)
+    - If loss is increasing → decrease LR more (we're overshooting)
+
+    Uses a sliding window of eval losses to compute trends and includes
+    patience/cooldown to prevent oscillations.
+    """
+
+    def __init__(
+        self,
+        optimizer,
+        base_lr: float,
+        warmup_steps: int,
+        window_size: int = 10,
+        increase_factor: float = 1.05,
+        decrease_factor: float = 0.9,
+        patience: int = 3,
+        min_lr: float = 1e-6,
+        threshold: float = 0.01,
+    ):
+        """
+        Args:
+            optimizer: The optimizer to adjust
+            base_lr: Starting learning rate (after warmup)
+            warmup_steps: Number of steps for linear warmup
+            window_size: Number of eval losses to consider for trend
+            increase_factor: Multiply LR by this when loss is decreasing well
+            decrease_factor: Multiply LR by this when loss is plateauing/increasing
+            patience: Minimum evals between LR adjustments
+            min_lr: Minimum learning rate (floor)
+            threshold: Minimum relative improvement to count as "decreasing"
+        """
+        self.optimizer = optimizer
+        self.base_lr = base_lr
+        self.warmup_steps = warmup_steps
+        self.window_size = window_size
+        self.increase_factor = increase_factor
+        self.decrease_factor = decrease_factor
+        self.patience = patience
+        self.min_lr = min_lr
+        self.threshold = threshold
+
+        # State
+        self.current_lr = base_lr
+        self.loss_history = []
+        self.steps_since_adjustment = 0
+        self.last_epoch = -1
+        self.in_warmup = True
+
+        # Set initial LR
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = 0.0  # Start at 0 for warmup
+            param_group['initial_lr'] = base_lr
+
+    def step(self, step: int = None):
+        """Update LR based on current step (for warmup)"""
+        if step is not None:
+            self.last_epoch = step
+        else:
+            self.last_epoch += 1
+
+        step = self.last_epoch
+
+        if step < self.warmup_steps:
+            # Linear warmup
+            lr = self.base_lr * (step / self.warmup_steps)
+            self.in_warmup = True
+        else:
+            # After warmup, use adaptive LR
+            lr = self.current_lr
+            self.in_warmup = False
+
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+
+    def on_eval(self, eval_loss: float) -> dict:
+        """
+        Called after each evaluation with the validation loss.
+        Returns a dict with adjustment info.
+
+        Args:
+            eval_loss: The validation loss from this eval
+
+        Returns:
+            dict with keys: 'adjusted', 'direction', 'new_lr', 'trend'
+        """
+        if self.in_warmup:
+            return {'adjusted': False, 'direction': 'warmup', 'new_lr': None, 'trend': None}
+
+        self.loss_history.append(eval_loss)
+        self.steps_since_adjustment += 1
+
+        # Keep only window_size losses
+        if len(self.loss_history) > self.window_size:
+            self.loss_history = self.loss_history[-self.window_size:]
+
+        # Need at least 3 points to compute trend
+        if len(self.loss_history) < 3:
+            return {'adjusted': False, 'direction': 'collecting', 'new_lr': None, 'trend': None}
+
+        # Check patience
+        if self.steps_since_adjustment < self.patience:
+            return {'adjusted': False, 'direction': 'patience', 'new_lr': None, 'trend': None}
+
+        # Compute trend using simple linear regression
+        trend = self._compute_trend()
+        result = {'adjusted': False, 'direction': None, 'new_lr': None, 'trend': trend}
+
+        # Compute relative improvement
+        first_loss = self.loss_history[0]
+        last_loss = self.loss_history[-1]
+        relative_change = (first_loss - last_loss) / (first_loss + 1e-8)
+
+        if trend < -self.threshold and relative_change > self.threshold:
+            # Loss is decreasing well → try increasing LR
+            old_lr = self.current_lr
+            new_lr = min(self.current_lr * self.increase_factor, self.base_lr * 2)  # Cap at 2x base
+            if new_lr > self.current_lr:
+                self.current_lr = new_lr
+                self._apply_lr()
+                self.steps_since_adjustment = 0
+                logger.info(f"[AdaptiveLR] Increasing LR: {old_lr:.2e} -> {new_lr:.2e} (trend: {trend:.4f}, rel_change: {relative_change:.4f})")
+                result = {'adjusted': True, 'direction': 'increase', 'new_lr': new_lr, 'trend': trend}
+
+        elif trend > self.threshold or relative_change < -self.threshold:
+            # Loss is increasing or getting worse → decrease LR
+            old_lr = self.current_lr
+            new_lr = max(self.current_lr * self.decrease_factor, self.min_lr)
+            if new_lr < self.current_lr:
+                self.current_lr = new_lr
+                self._apply_lr()
+                self.steps_since_adjustment = 0
+                logger.info(f"[AdaptiveLR] Decreasing LR (loss increasing): {old_lr:.2e} -> {new_lr:.2e} (trend: {trend:.4f}, rel_change: {relative_change:.4f})")
+                result = {'adjusted': True, 'direction': 'decrease', 'new_lr': new_lr, 'trend': trend}
+
+        elif abs(trend) < self.threshold and abs(relative_change) < self.threshold:
+            # Loss is plateauing → decrease LR to fine-tune
+            old_lr = self.current_lr
+            new_lr = max(self.current_lr * self.decrease_factor, self.min_lr)
+            if new_lr < self.current_lr:
+                self.current_lr = new_lr
+                self._apply_lr()
+                self.steps_since_adjustment = 0
+                logger.info(f"[AdaptiveLR] Decreasing LR (plateau): {old_lr:.2e} -> {new_lr:.2e} (trend: {trend:.4f}, rel_change: {relative_change:.4f})")
+                result = {'adjusted': True, 'direction': 'plateau', 'new_lr': new_lr, 'trend': trend}
+
+        return result
+
+    def _compute_trend(self) -> float:
+        """Compute trend (slope) of loss history using linear regression"""
+        n = len(self.loss_history)
+        if n < 2:
+            return 0.0
+
+        # Normalize losses for numerical stability
+        mean_loss = sum(self.loss_history) / n
+        normalized = [l / (mean_loss + 1e-8) for l in self.loss_history]
+
+        # Simple linear regression: slope = Σ(xi - x̄)(yi - ȳ) / Σ(xi - x̄)²
+        x_mean = (n - 1) / 2
+        numerator = sum((i - x_mean) * (y - 1.0) for i, y in enumerate(normalized))
+        denominator = sum((i - x_mean) ** 2 for i in range(n))
+
+        if denominator < 1e-8:
+            return 0.0
+
+        return numerator / denominator
+
+    def _apply_lr(self):
+        """Apply current_lr to optimizer"""
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = self.current_lr
+
+    def state_dict(self):
+        """Return scheduler state for checkpointing"""
+        return {
+            'current_lr': self.current_lr,
+            'loss_history': self.loss_history,
+            'steps_since_adjustment': self.steps_since_adjustment,
+            'last_epoch': self.last_epoch,
+            'in_warmup': self.in_warmup,
+        }
+
+    def load_state_dict(self, state_dict):
+        """Load scheduler state from checkpoint"""
+        self.current_lr = state_dict['current_lr']
+        self.loss_history = state_dict['loss_history']
+        self.steps_since_adjustment = state_dict['steps_since_adjustment']
+        self.last_epoch = state_dict['last_epoch']
+        self.in_warmup = state_dict['in_warmup']
+        self._apply_lr()
 
 # Global stop flag for graceful training termination
 _stop_requested = False
@@ -109,7 +312,24 @@ def setup_schedulers(optimizers: list, config: TrainingConfig, start_step: int =
     schedulers = []
 
     for optimizer in optimizers:
-        if config.scheduler == "cosine":
+        if config.scheduler == "adaptive":
+            # Adaptive scheduler that responds to loss trends
+            scheduler = AdaptiveLRScheduler(
+                optimizer=optimizer,
+                base_lr=config.lr,
+                warmup_steps=config.warmup_steps,
+                window_size=config.adaptive_window,
+                increase_factor=config.adaptive_increase_factor,
+                decrease_factor=config.adaptive_decrease_factor,
+                patience=config.adaptive_patience,
+                min_lr=config.adaptive_min_lr,
+                threshold=config.adaptive_threshold,
+            )
+            # Set to start_step for resuming
+            if start_step > 0:
+                scheduler.last_epoch = start_step - 1
+
+        elif config.scheduler == "cosine":
             def lr_lambda(step):
                 # Adjust step to be relative to start_step
                 relative_step = step - start_step
@@ -149,7 +369,7 @@ def setup_schedulers(optimizers: list, config: TrainingConfig, start_step: int =
 
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=start_step - 1)
 
-        else:  # none
+        else:  # constant
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: 1.0, last_epoch=start_step - 1)
 
         schedulers.append(scheduler)
@@ -230,10 +450,10 @@ def train_model(
 
     if checkpoint_path and os.path.exists(checkpoint_path):
         print(f"\n🔄 Loading checkpoint from {checkpoint_path}...")
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        # Load directly to device so weights go straight into VRAM (no CPU RAM staging)
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
         model.load_state_dict(checkpoint['model_state_dict'])
-        model = model.to(device=device, dtype=torch.bfloat16)
 
         start_step = checkpoint.get('step', 0)
         total_tokens_seen = checkpoint.get('total_tokens_seen', 0)
@@ -248,6 +468,8 @@ def train_model(
             print("   Loaded optimizer state")
         else:
             print("   Skipped loading optimizer state (starting fresh)")
+
+        del checkpoint
 
         # Handle extended training
         if additional_steps > 0:
@@ -285,9 +507,12 @@ def train_model(
         # Set to start_step so that the first scheduler.step() call will compute LR for start_step + 1
         for scheduler in schedulers:
             scheduler.last_epoch = start_step
-            # Recompute LR based on current step
-            for param_group, lr_lambda in zip(scheduler.optimizer.param_groups, scheduler.lr_lambdas):
-                param_group['lr'] = param_group['initial_lr'] * lr_lambda(start_step)
+            # Recompute LR based on current step (skip for AdaptiveLRScheduler which handles its own LR)
+            if hasattr(scheduler, 'lr_lambdas'):
+                for param_group, lr_lambda in zip(scheduler.optimizer.param_groups, scheduler.lr_lambdas):
+                    param_group['lr'] = param_group['initial_lr'] * lr_lambda(start_step)
+            elif isinstance(scheduler, AdaptiveLRScheduler):
+                scheduler.step(start_step)
 
         print(f"   Scheduler resuming at step {start_step} (LR={optimizers[0].param_groups[0]['lr']:.2e})")
     else:
@@ -308,9 +533,12 @@ def train_model(
         # We need to set it to start_step and compute the initial LR
         for scheduler in schedulers:
             scheduler.last_epoch = start_step
-            # Manually set initial LR for the first iteration
-            for param_group, lr_lambda in zip(scheduler.optimizer.param_groups, scheduler.lr_lambdas):
-                param_group['lr'] = param_group['initial_lr'] * lr_lambda(start_step)
+            # Manually set initial LR for the first iteration (skip for AdaptiveLRScheduler which handles its own LR)
+            if hasattr(scheduler, 'lr_lambdas'):
+                for param_group, lr_lambda in zip(scheduler.optimizer.param_groups, scheduler.lr_lambdas):
+                    param_group['lr'] = param_group['initial_lr'] * lr_lambda(start_step)
+            elif isinstance(scheduler, AdaptiveLRScheduler):
+                scheduler.step(start_step)
 
         print(f"   Scheduler starting at step {start_step} (LR={optimizers[0].param_groups[0]['lr']:.2e})")
 
@@ -479,6 +707,17 @@ def train_model(
                 # Update previous values
                 prev_val_loss = eval_metrics['val_loss']
                 prev_val_acc = eval_metrics['val_accuracy']
+
+                # Adaptive scheduler: update based on eval loss
+                if train_config.scheduler == "adaptive":
+                    for scheduler in schedulers:
+                        if isinstance(scheduler, AdaptiveLRScheduler):
+                            adj_info = scheduler.on_eval(eval_metrics['val_loss'])
+                            if adj_info['adjusted']:
+                                direction_emoji = "📈" if adj_info['direction'] == 'increase' else "📉"
+                                print(f"   {direction_emoji} Adaptive LR: {adj_info['direction']} → {adj_info['new_lr']:.2e} (trend: {adj_info['trend']:.4f})")
+                                if callback and hasattr(callback, 'on_log'):
+                                    callback.on_log(f"Adaptive LR {adj_info['direction']}: {adj_info['new_lr']:.2e}", "info")
 
                 # Save checkpoint if best
                 if eval_metrics['val_loss'] < best_val_loss:

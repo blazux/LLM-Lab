@@ -162,11 +162,11 @@ const ValidationPanel = ({ nodes, edges, mode, architectureFilter }: ValidationP
     });
 
     // Check for scheduler
-    const hasScheduler = nodes.some(n => ['cosine', 'linear', 'polynomial', 'constant'].includes(n.type || ''));
+    const hasScheduler = nodes.some(n => ['cosine', 'linear', 'polynomial', 'constant', 'adaptive'].includes(n.type || ''));
     validations.push({
       label: 'LR Scheduler',
       status: hasScheduler ? 'complete' : 'warning',
-      message: hasScheduler ? undefined : 'Add Cosine, Linear, Polynomial, or Constant scheduler'
+      message: hasScheduler ? undefined : 'Add a scheduler (Cosine, Linear, Adaptive, etc.)'
     });
 
     // Check for hyperparameters
@@ -208,7 +208,7 @@ const ValidationPanel = ({ nodes, edges, mode, architectureFilter }: ValidationP
     });
 
     // Check for scheduler (optional but recommended)
-    const hasScheduler = nodes.some(n => ['cosine', 'linear', 'polynomial', 'constant'].includes(n.type || ''));
+    const hasScheduler = nodes.some(n => ['cosine', 'linear', 'polynomial', 'constant', 'adaptive'].includes(n.type || ''));
     validations.push({
       label: 'LR Scheduler',
       status: hasScheduler ? 'complete' : 'warning',
@@ -289,7 +289,7 @@ const ValidationPanel = ({ nodes, edges, mode, architectureFilter }: ValidationP
     });
 
     // Check for scheduler (optional)
-    const hasScheduler = nodes.some(n => ['cosine', 'linear', 'polynomial', 'constant'].includes(n.type || ''));
+    const hasScheduler = nodes.some(n => ['cosine', 'linear', 'polynomial', 'constant', 'adaptive'].includes(n.type || ''));
     validations.push({
       label: 'LR Scheduler',
       status: hasScheduler ? 'complete' : 'warning',

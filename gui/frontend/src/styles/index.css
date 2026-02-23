@@ -20,8 +20,7 @@ body {
 
 /* React Flow custom styles */
 .react-flow__node {
-  border-radius: 12px;
-  border: 2px solid;
+  border: none;
   font-size: 12px;
   transition: all 0.2s ease;
 }

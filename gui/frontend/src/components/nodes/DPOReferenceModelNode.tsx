@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { Handle, Position } from 'reactflow';
 import { motion } from 'framer-motion';
+import { Crosshair } from 'lucide-react';
 
 interface DPOReferenceModelNodeProps {
   data: {
@@ -15,19 +16,22 @@ export default memo(({ data }: DPOReferenceModelNodeProps) => {
 
   return (
     <motion.div
-      initial={{ scale: 0.8, opacity: 0 }}
+      initial={{ scale: 0.95, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
-      className="px-6 py-4 shadow-lg rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 border-2 border-blue-400 min-w-[240px]"
-      style={{ cursor: 'grab' }}
+      className="px-4 py-3 shadow-lg rounded-lg border border-pink-500/40 min-w-[200px]"
+      style={{ cursor: 'grab', backgroundColor: 'rgba(236, 72, 153, 0.08)' }}
     >
       <div className="flex items-center gap-3">
-        <div className="text-3xl">🎯</div>
+        <div className="w-1 h-12 rounded-full bg-cat-algo" />
+        <div className="p-2 rounded bg-slate-700">
+          <Crosshair className="w-4 h-4 text-slate-300" />
+        </div>
         <div className="flex-1">
-          <div className="text-white font-bold text-sm">DPO Reference Model</div>
-          <div className="text-blue-200 text-xs mt-1 truncate" title={displayPath}>
+          <div className="text-slate-200 font-medium text-sm">DPO Reference Model</div>
+          <div className="text-slate-400 text-xs mt-0.5 truncate" title={displayPath}>
             {fileName}
           </div>
-          <div className="text-blue-300 text-xs italic">
+          <div className="text-slate-500 text-xs italic">
             (optional)
           </div>
         </div>
@@ -36,8 +40,8 @@ export default memo(({ data }: DPOReferenceModelNodeProps) => {
         type="source"
         position={Position.Top}
         id="top"
-        className="!bg-blue-300"
-        style={{ width: 12, height: 12 }}
+        className="!bg-slate-400 !border-slate-500"
+        style={{ width: 10, height: 10 }}
       />
     </motion.div>
   );

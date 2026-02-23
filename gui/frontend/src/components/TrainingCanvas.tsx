@@ -24,6 +24,7 @@ import CosineSchedulerNode from './nodes/CosineSchedulerNode';
 import LinearSchedulerNode from './nodes/LinearSchedulerNode';
 import PolynomialSchedulerNode from './nodes/PolynomialSchedulerNode';
 import ConstantSchedulerNode from './nodes/ConstantSchedulerNode';
+import AdaptiveSchedulerNode from './nodes/AdaptiveSchedulerNode';
 import HyperparametersNode from './nodes/HyperparametersNode';
 import ConfigPanel from './ConfigPanel';
 import ValidationPanel from './ValidationPanel';
@@ -44,6 +45,7 @@ const nodeTypes = {
   linear: LinearSchedulerNode,
   polynomial: PolynomialSchedulerNode,
   constant: ConstantSchedulerNode,
+  adaptive: AdaptiveSchedulerNode,
   hyperparams: HyperparametersNode,
 };
 
@@ -175,6 +177,18 @@ const TrainingCanvas = ({
             warmup_steps: 1000
           };
           break;
+        case 'adaptive':
+          nodeData = {
+            label,
+            warmup_steps: 1000,
+            adaptive_window: 10,
+            adaptive_patience: 3,
+            adaptive_increase_factor: 1.05,
+            adaptive_decrease_factor: 0.9,
+            adaptive_min_lr: 1e-6,
+            adaptive_threshold: 0.01
+          };
+          break;
         case 'hyperparams':
           nodeData = {
             label,
@@ -259,7 +273,7 @@ const TrainingCanvas = ({
       const modelNode = nodes.find(n => n.type === 'model');
       const datasetNodes = nodes.filter(n => n.type === 'dataset');
       const optimizerNode = nodes.find(n => ['adamw', 'muon', 'lion', 'sophia'].includes(n.type || ''));
-      const schedulerNode = nodes.find(n => ['cosine', 'linear', 'polynomial', 'constant'].includes(n.type || ''));
+      const schedulerNode = nodes.find(n => ['cosine', 'linear', 'polynomial', 'constant', 'adaptive'].includes(n.type || ''));
       const hyperparamsNode = nodes.find(n => n.type === 'hyperparams');
 
       if (datasetNodes.length === 0) {
@@ -301,6 +315,13 @@ const TrainingCanvas = ({
         max_steps: hyperparamsNode?.data.max_steps || 10000,
         warmup_steps: schedulerNode?.data.warmup_steps || 1000,
         scheduler: schedulerNode?.type || 'cosine',
+        // Adaptive scheduler parameters
+        adaptive_window: schedulerNode?.data.adaptive_window || 10,
+        adaptive_increase_factor: schedulerNode?.data.adaptive_increase_factor || 1.05,
+        adaptive_decrease_factor: schedulerNode?.data.adaptive_decrease_factor || 0.9,
+        adaptive_patience: schedulerNode?.data.adaptive_patience || 3,
+        adaptive_min_lr: schedulerNode?.data.adaptive_min_lr || 1e-6,
+        adaptive_threshold: schedulerNode?.data.adaptive_threshold || 0.01,
         grad_clip: hyperparamsNode?.data.grad_clip || 1.0,
         eval_every: hyperparamsNode?.data.eval_every || 500,
         eval_steps: hyperparamsNode?.data.eval_steps || 100,
@@ -409,6 +430,8 @@ const TrainingCanvas = ({
                 return '#d946ef';
               case 'constant':
                 return '#64748b';
+              case 'adaptive':
+                return '#8b5cf6'; // violet
               case 'hyperparams':
                 return '#22c55e';
               default:

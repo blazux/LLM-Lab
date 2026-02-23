@@ -1318,6 +1318,120 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
           </div>
         );
 
+      case 'adaptive':
+        return (
+          <div className="space-y-4">
+            <div className="text-slate-300 text-sm">
+              <p className="mb-2">Adaptive scheduler adjusts learning rate based on loss trends during training.</p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Warmup Steps
+              </label>
+              <input
+                type="number"
+                value={node.data.warmup_steps || 1000}
+                onChange={(e) => handleChange('warmup_steps', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Number of steps for learning rate warmup
+              </p>
+            </div>
+            <div className="border-t border-slate-600 pt-4">
+              <h4 className="text-sm font-semibold text-violet-400 mb-3">Adaptive Parameters</h4>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Window Size
+              </label>
+              <input
+                type="number"
+                value={node.data.adaptive_window || 10}
+                onChange={(e) => handleChange('adaptive_window', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Number of recent evaluations to consider for trend analysis
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Patience
+              </label>
+              <input
+                type="number"
+                value={node.data.adaptive_patience || 3}
+                onChange={(e) => handleChange('adaptive_patience', parseInt(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Consecutive evals needed in same direction before adjusting
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Increase Factor
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.adaptive_increase_factor || 1.05}
+                onChange={(e) => handleChange('adaptive_increase_factor', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Multiply LR by this when loss is decreasing
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Decrease Factor
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={node.data.adaptive_decrease_factor || 0.9}
+                onChange={(e) => handleChange('adaptive_decrease_factor', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Multiply LR by this when loss is increasing
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Minimum LR
+              </label>
+              <input
+                type="number"
+                step="0.000001"
+                value={node.data.adaptive_min_lr || 1e-6}
+                onChange={(e) => handleChange('adaptive_min_lr', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Never decrease LR below this value
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Trend Threshold
+              </label>
+              <input
+                type="number"
+                step="0.001"
+                value={node.data.adaptive_threshold || 0.01}
+                onChange={(e) => handleChange('adaptive_threshold', parseFloat(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Minimum slope magnitude to trigger adjustment
+              </p>
+            </div>
+          </div>
+        );
+
       case 'hyperparams':
         return (
           <div className="space-y-4">

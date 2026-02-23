@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { Handle, Position } from 'reactflow';
 import { motion } from 'framer-motion';
+import { Triangle } from 'lucide-react';
 
 interface ReLUNodeProps {
   data: {
@@ -12,22 +13,25 @@ interface ReLUNodeProps {
 export default memo(({ data }: ReLUNodeProps) => {
   return (
     <motion.div
-      initial={{ scale: 0.8, opacity: 0 }}
+      initial={{ scale: 0.95, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
-      className="px-6 py-4 shadow-lg rounded-xl bg-gradient-to-br from-pink-500 to-pink-700 border-2 border-pink-400 min-w-[200px]"
-      style={{ cursor: 'grab' }}
+      className="px-4 py-3 shadow-lg rounded-lg border border-orange-500/40 min-w-[160px]"
+      style={{ cursor: 'grab', backgroundColor: 'rgba(249, 115, 22, 0.08)' }}
     >
       <Handle
         type="target"
         position={Position.Bottom}
-        className="!bg-pink-300"
-        style={{ width: 12, height: 12 }}
+        className="!bg-slate-400 !border-slate-500"
+        style={{ width: 10, height: 10 }}
       />
       <div className="flex items-center gap-3">
-        <div className="text-3xl">🔺</div>
+        <div className="w-1 h-10 rounded-full bg-cat-ffn" />
+        <div className="p-2 rounded bg-slate-700">
+          <Triangle className="w-4 h-4 text-slate-300" />
+        </div>
         <div>
-          <div className="text-white font-bold text-sm">ReLU FFN</div>
-          <div className="text-pink-200 text-xs mt-1">
+          <div className="text-slate-200 font-medium text-sm">ReLU FFN</div>
+          <div className="text-slate-400 text-xs mt-0.5">
             d_ff: {data.d_ff || 3584}
           </div>
         </div>
@@ -35,8 +39,8 @@ export default memo(({ data }: ReLUNodeProps) => {
       <Handle
         type="source"
         position={Position.Top}
-        className="!bg-pink-300"
-        style={{ width: 12, height: 12 }}
+        className="!bg-slate-400 !border-slate-500"
+        style={{ width: 10, height: 10 }}
       />
     </motion.div>
   );

@@ -24,6 +24,7 @@ import CosineSchedulerNode from './nodes/CosineSchedulerNode';
 import LinearSchedulerNode from './nodes/LinearSchedulerNode';
 import PolynomialSchedulerNode from './nodes/PolynomialSchedulerNode';
 import ConstantSchedulerNode from './nodes/ConstantSchedulerNode';
+import AdaptiveSchedulerNode from './nodes/AdaptiveSchedulerNode';
 import RLHFHyperparametersNode from './nodes/RLHFHyperparametersNode';
 import LoRANode from './nodes/LoRANode';
 import PPORewardModelNode from './nodes/PPORewardModelNode';
@@ -47,6 +48,7 @@ const nodeTypes = {
   linear: LinearSchedulerNode,
   polynomial: PolynomialSchedulerNode,
   constant: ConstantSchedulerNode,
+  adaptive: AdaptiveSchedulerNode,
   rlhf_hyperparams: RLHFHyperparametersNode,
   lora: LoRANode,
   ppo_reward: PPORewardModelNode,
@@ -120,11 +122,38 @@ const RLHFCanvas = ({
         y: event.clientY,
       });
 
+      // Set default data based on node type
+      let nodeData: any = { label };
+
+      switch (type) {
+        case 'adaptive':
+          nodeData = {
+            label,
+            warmup_steps: 100,
+            adaptive_window: 10,
+            adaptive_patience: 3,
+            adaptive_increase_factor: 1.05,
+            adaptive_decrease_factor: 0.9,
+            adaptive_min_lr: 1e-6,
+            adaptive_threshold: 0.01
+          };
+          break;
+        case 'cosine':
+        case 'linear':
+        case 'polynomial':
+        case 'constant':
+          nodeData = {
+            label,
+            warmup_steps: 100
+          };
+          break;
+      }
+
       const newNode: Node = {
         id: `${type}-${Date.now()}`,
         type,
         position,
-        data: { label },
+        data: nodeData,
       };
 
       setNodes((nds) => nds.concat(newNode));
@@ -382,6 +411,8 @@ const RLHFCanvas = ({
                 return '#d946ef'; // fuchsia
               case 'constant':
                 return '#64748b'; // slate
+              case 'adaptive':
+                return '#8b5cf6'; // violet
               case 'rlhf_hyperparams':
                 return '#f59e0b'; // amber
               case 'lora':

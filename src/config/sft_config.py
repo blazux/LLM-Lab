@@ -47,6 +47,14 @@ class SFTConfig:
     scheduler: str = "cosine"
     warmup_steps: int = 100
 
+    # Adaptive scheduler parameters (only used when scheduler="adaptive")
+    adaptive_window: int = 10
+    adaptive_increase_factor: float = 1.05
+    adaptive_decrease_factor: float = 0.9
+    adaptive_patience: int = 3
+    adaptive_min_lr: float = 1e-6
+    adaptive_threshold: float = 0.01
+
     # Logging & Checkpointing
     log_every: int = 10
     save_every: int = 500

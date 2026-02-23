@@ -117,6 +117,13 @@ class SFTRequest(BaseModel):
     max_steps: int
     warmup_steps: int
     scheduler: str
+    # Adaptive scheduler params
+    adaptive_window: Optional[int] = 10
+    adaptive_increase_factor: Optional[float] = 1.05
+    adaptive_decrease_factor: Optional[float] = 0.9
+    adaptive_patience: Optional[int] = 3
+    adaptive_min_lr: Optional[float] = 1e-6
+    adaptive_threshold: Optional[float] = 0.01
     max_grad_norm: float
     log_every: int
     save_every: int
@@ -219,6 +226,7 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
 
         # Handle checkpoint-based config loading or fresh training
         start_step = 0
+        load_optimizer_state = True  # Will be set to False if optimizer/scheduler changed
         if checkpoint_path and os.path.exists(checkpoint_path):
             # Load checkpoint to extract config and step count
             try:
@@ -263,6 +271,33 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
 
                 # Update training state with checkpoint config
                 training_state["model_config"] = model_config.__dict__
+
+                # Check if optimizer/scheduler changed - if so, don't load optimizer state
+                checkpoint_train_config = checkpoint.get('train_config')
+                if checkpoint_train_config:
+                    old_optimizer = getattr(checkpoint_train_config, 'optimizer', None)
+                    old_scheduler = getattr(checkpoint_train_config, 'scheduler', None)
+                    new_optimizer = train_config_dict.get('optimizer')
+                    new_scheduler = train_config_dict.get('scheduler')
+
+                    if old_optimizer != new_optimizer:
+                        load_optimizer_state = False
+                        metrics_queue.put({
+                            "type": "log",
+                            "level": "info",
+                            "message": f"Optimizer changed ({old_optimizer} → {new_optimizer}), skipping optimizer state load",
+                            "timestamp": time.time()
+                        })
+                    if old_scheduler != new_scheduler:
+                        load_optimizer_state = False
+                        metrics_queue.put({
+                            "type": "log",
+                            "level": "info",
+                            "message": f"Scheduler changed ({old_scheduler} → {new_scheduler}), skipping scheduler state load",
+                            "timestamp": time.time()
+                        })
+
+                del checkpoint  # Free memory
 
             except Exception as e:
                 error_msg = f"Failed to load checkpoint config: {e}"
@@ -327,6 +362,7 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
             checkpoint_path=checkpoint_path,
             output_dir=output_dir,
             additional_steps=additional_steps,
+            load_optimizer_state=load_optimizer_state,
             callback=callback
         )
 

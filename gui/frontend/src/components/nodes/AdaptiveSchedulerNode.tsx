@@ -1,24 +1,24 @@
 import { memo } from 'react';
 import { Handle, Position } from 'reactflow';
 import { motion } from 'framer-motion';
-import { Timer } from 'lucide-react';
+import { Activity } from 'lucide-react';
 
-interface TemporalConvNodeProps {
+interface AdaptiveSchedulerNodeProps {
   data: {
     label: string;
-    conv_kernel_size?: number;
+    warmup_steps?: number;
+    adaptive_window?: number;
+    adaptive_patience?: number;
   };
 }
 
-export default memo(({ data }: TemporalConvNodeProps) => {
-  const conv_kernel_size = data.conv_kernel_size || 4;
-
+export default memo(({ data }: AdaptiveSchedulerNodeProps) => {
   return (
     <motion.div
       initial={{ scale: 0.95, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
-      className="px-4 py-3 shadow-lg rounded-lg border border-cyan-500/40 min-w-[160px]"
-      style={{ cursor: 'grab', backgroundColor: 'rgba(6, 182, 212, 0.08)' }}
+      className="px-4 py-3 shadow-lg rounded-lg border border-violet-500/40 min-w-[160px]"
+      style={{ cursor: 'grab', backgroundColor: 'rgba(139, 92, 246, 0.08)' }}
     >
       <Handle
         type="target"
@@ -27,14 +27,14 @@ export default memo(({ data }: TemporalConvNodeProps) => {
         style={{ width: 10, height: 10 }}
       />
       <div className="flex items-center gap-3">
-        <div className="w-1 h-10 rounded-full bg-cat-ssm" />
+        <div className="w-1 h-10 rounded-full bg-cat-sched" />
         <div className="p-2 rounded bg-slate-700">
-          <Timer className="w-4 h-4 text-slate-300" />
+          <Activity className="w-4 h-4 text-slate-300" />
         </div>
         <div>
-          <div className="text-slate-200 font-medium text-sm">Temporal Conv</div>
+          <div className="text-slate-200 font-medium text-sm">Adaptive</div>
           <div className="text-slate-400 text-xs mt-0.5">
-            Kernel: {conv_kernel_size}
+            Window: {data.adaptive_window || 10} evals
           </div>
         </div>
       </div>

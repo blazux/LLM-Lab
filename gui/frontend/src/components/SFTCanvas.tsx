@@ -24,6 +24,7 @@ import CosineSchedulerNode from './nodes/CosineSchedulerNode';
 import LinearSchedulerNode from './nodes/LinearSchedulerNode';
 import PolynomialSchedulerNode from './nodes/PolynomialSchedulerNode';
 import ConstantSchedulerNode from './nodes/ConstantSchedulerNode';
+import AdaptiveSchedulerNode from './nodes/AdaptiveSchedulerNode';
 import HyperparametersNode from './nodes/HyperparametersNode';
 import LoRANode from './nodes/LoRANode';
 import ConfigPanel from './ConfigPanel';
@@ -44,6 +45,7 @@ const nodeTypes = {
   linear: LinearSchedulerNode,
   polynomial: PolynomialSchedulerNode,
   constant: ConstantSchedulerNode,
+  adaptive: AdaptiveSchedulerNode,
   hyperparams: HyperparametersNode,
   lora: LoRANode,
 };
@@ -191,6 +193,18 @@ const SFTCanvas = ({
             warmup_steps: 100
           };
           break;
+        case 'adaptive':
+          nodeData = {
+            label,
+            warmup_steps: 100,
+            adaptive_window: 10,
+            adaptive_patience: 3,
+            adaptive_increase_factor: 1.05,
+            adaptive_decrease_factor: 0.9,
+            adaptive_min_lr: 1e-6,
+            adaptive_threshold: 0.01
+          };
+          break;
       }
 
       const newNode: Node = {
@@ -297,6 +311,13 @@ const SFTCanvas = ({
         max_steps: hyperparamsNode?.data.max_steps || 5000,
         warmup_steps: hyperparamsNode?.data.warmup_steps || schedulerNode?.data.warmup_steps || 100,
         scheduler: schedulerNode?.type || 'cosine',
+        // Adaptive scheduler parameters
+        adaptive_window: schedulerNode?.data.adaptive_window || 10,
+        adaptive_increase_factor: schedulerNode?.data.adaptive_increase_factor || 1.05,
+        adaptive_decrease_factor: schedulerNode?.data.adaptive_decrease_factor || 0.9,
+        adaptive_patience: schedulerNode?.data.adaptive_patience || 3,
+        adaptive_min_lr: schedulerNode?.data.adaptive_min_lr || 1e-6,
+        adaptive_threshold: schedulerNode?.data.adaptive_threshold || 0.01,
         max_grad_norm: hyperparamsNode?.data.grad_clip || 1.0,
         log_every: 10,
         save_every: 500,
@@ -399,6 +420,8 @@ const SFTCanvas = ({
                 return '#d946ef'; // fuchsia
               case 'constant':
                 return '#64748b'; // slate
+              case 'adaptive':
+                return '#8b5cf6'; // violet
               case 'hyperparams':
                 return '#22c55e'; // green
               case 'lora':

@@ -69,6 +69,13 @@ export interface TrainingConfigData {
   grad_clip: number;
   eval_every: number;
   eval_steps: number;
+  // Adaptive scheduler params
+  adaptive_window?: number;
+  adaptive_increase_factor?: number;
+  adaptive_decrease_factor?: number;
+  adaptive_patience?: number;
+  adaptive_min_lr?: number;
+  adaptive_threshold?: number;
   // Optimizer-specific params
   adamw_beta1?: number;
   adamw_beta2?: number;
@@ -98,6 +105,13 @@ export interface SFTConfigData {
   max_steps: number;
   warmup_steps: number;
   scheduler: string;
+  // Adaptive scheduler params
+  adaptive_window?: number;
+  adaptive_increase_factor?: number;
+  adaptive_decrease_factor?: number;
+  adaptive_patience?: number;
+  adaptive_min_lr?: number;
+  adaptive_threshold?: number;
   max_grad_norm: number;
   log_every: number;
   save_every: number;

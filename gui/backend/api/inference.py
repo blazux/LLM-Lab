@@ -140,7 +140,8 @@ async def generate(request: GenerateRequest):
 
         # Apply chat template if this is a chat model
         if is_chat_model:
-            formatted_prompt = f"<|user|>{request.prompt}<|end|>\n<|assistant|>"
+            # Use text markers matching SFT training format
+            formatted_prompt = f"User: {request.prompt}\n\nAssistant:"
             print(f"Applied chat template: {repr(formatted_prompt[:100])}...")
             # Debug: verify tokenization
             token_ids = tokenizer.encode(formatted_prompt)

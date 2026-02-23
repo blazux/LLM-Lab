@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { Handle, Position } from 'reactflow';
 import { motion } from 'framer-motion';
+import { Waves } from 'lucide-react';
 
 interface SSMCoreNodeProps {
   data: {
@@ -14,22 +15,25 @@ export default memo(({ data }: SSMCoreNodeProps) => {
 
   return (
     <motion.div
-      initial={{ scale: 0.8, opacity: 0 }}
+      initial={{ scale: 0.95, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
-      className="px-6 py-4 shadow-lg rounded-xl bg-gradient-to-br from-cyan-500 to-cyan-700 border-2 border-cyan-400 min-w-[200px]"
-      style={{ cursor: 'grab' }}
+      className="px-4 py-3 shadow-lg rounded-lg border border-cyan-500/40 min-w-[160px]"
+      style={{ cursor: 'grab', backgroundColor: 'rgba(6, 182, 212, 0.08)' }}
     >
       <Handle
         type="target"
         position={Position.Bottom}
-        className="!bg-cyan-300"
-        style={{ width: 12, height: 12 }}
+        className="!bg-slate-400 !border-slate-500"
+        style={{ width: 10, height: 10 }}
       />
       <div className="flex items-center gap-3">
-        <div className="text-3xl">🌊</div>
+        <div className="w-1 h-10 rounded-full bg-cat-ssm" />
+        <div className="p-2 rounded bg-slate-700">
+          <Waves className="w-4 h-4 text-slate-300" />
+        </div>
         <div>
-          <div className="text-white font-bold text-sm">SSM Core</div>
-          <div className="text-cyan-200 text-xs mt-1">
+          <div className="text-slate-200 font-medium text-sm">SSM Core</div>
+          <div className="text-slate-400 text-xs mt-0.5">
             State: {state_size}
           </div>
         </div>
@@ -37,8 +41,8 @@ export default memo(({ data }: SSMCoreNodeProps) => {
       <Handle
         type="source"
         position={Position.Top}
-        className="!bg-cyan-300"
-        style={{ width: 12, height: 12 }}
+        className="!bg-slate-400 !border-slate-500"
+        style={{ width: 10, height: 10 }}
       />
     </motion.div>
   );

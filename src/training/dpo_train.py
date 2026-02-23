@@ -11,7 +11,7 @@ from typing import Optional
 
 from model.factory import build_model
 from config import RLHFConfig
-from data import load_tokenizer
+from data import load_tokenizer, format_prompt_for_generation, format_preference_pair
 from training.report import TrainingReport
 
 
@@ -36,7 +36,10 @@ def load_policy_model(checkpoint_path: str, device: torch.device, rlhf_config: O
 
     model_config = checkpoint['model_config']
     model = build_model(model_config)
+    # Move empty model to device first so weights load directly into VRAM
+    model = model.to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
+    del checkpoint
 
     # Apply LoRA if configured
     if rlhf_config and rlhf_config.use_lora:
@@ -54,8 +57,8 @@ def load_policy_model(checkpoint_path: str, device: torch.device, rlhf_config: O
 
         model = apply_lora_to_model(model, model_config, lora_config_dict)
         print(f"   ✓ LoRA applied with preset: {rlhf_config.lora_preset}")
-
-    model = model.to(device)
+        # LoRA adapter weights are initialized on CPU - move them to device
+        model = model.to(device)
 
     tokenizer = load_tokenizer(model_config.tokenizer_name)
 
@@ -70,8 +73,10 @@ def load_reference_model(checkpoint_path: str, device: torch.device):
 
     model_config = checkpoint['model_config']
     model = build_model(model_config)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    # Move empty model to device first so weights load directly into VRAM
     model = model.to(device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    del checkpoint
     model.eval()  # Reference model is frozen
 
     print(f"✅ Reference model loaded ({model.count_parameters():,} parameters)")
@@ -129,7 +134,16 @@ def compute_log_probs(model, tokenizer, prompts, responses, device, requires_gra
     max_seq_len = model.config.max_seq_len
 
     for prompt, response in zip(prompts, responses):
-        # Tokenize response first to know its length
+        # Format prompt and response with proper role markers
+        # This ensures consistency with SFT training format
+        # Format: "User: {prompt}\n\nAssistant: {response}"
+        formatted_prompt = format_prompt_for_generation(prompt)  # "User: ...\n\nAssistant:"
+        formatted_full = format_preference_pair(prompt, response)  # "User: ...\n\nAssistant: {response}"
+
+        # Tokenize the formatted prompt (up to and including "Assistant:")
+        prompt_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=True)
+
+        # Tokenize just the response part
         response_tokens = tokenizer.encode(response, add_special_tokens=False)
         response_length = len(response_tokens)
 
@@ -142,9 +156,6 @@ def compute_log_probs(model, tokenizer, prompts, responses, device, requires_gra
             response_tokens = response_tokens[-(max_seq_len - 2):]
             response_length = len(response_tokens)
 
-        # Tokenize prompt
-        prompt_tokens = tokenizer.encode(prompt, add_special_tokens=True)
-
         # Truncate prompt if combined sequence is too long
         # Reserve space for response + 1 (for computing logits at response positions)
         max_prompt_length = max_seq_len - response_length - 1
@@ -155,7 +166,7 @@ def compute_log_probs(model, tokenizer, prompts, responses, device, requires_gra
             # Edge case: response is too long, use minimal prompt
             prompt_tokens = prompt_tokens[:1] if len(prompt_tokens) > 0 else []
 
-        # Combine tokens: prompt + response
+        # Combine tokens: formatted_prompt + response
         combined_tokens = prompt_tokens + response_tokens
         input_ids = torch.tensor([combined_tokens], dtype=torch.long, device=device)
 
@@ -400,6 +411,13 @@ def train_dpo(config: RLHFConfig, callback=None):
                         prompt = sample.get('prompt', sample.get('question', sample.get('instruction', 'Hello')))
                         chosen = sample.get('chosen', sample.get('response', ''))
                         rejected = sample.get('rejected', sample.get('response', ''))
+
+                    # Strip any existing role markers from the responses
+                    # (in case dataset already has partial formatting)
+                    if chosen.startswith('Assistant:'):
+                        chosen = chosen[len('Assistant:'):].strip()
+                    if rejected.startswith('Assistant:'):
+                        rejected = rejected[len('Assistant:'):].strip()
 
                     # Ensure all are strings and non-empty
                     if not isinstance(prompt, str) or not prompt.strip():

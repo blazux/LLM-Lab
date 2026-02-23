@@ -12,7 +12,7 @@ from typing import Optional, List, Tuple
 
 from model.factory import build_model
 from config import RLHFConfig
-from data import load_tokenizer
+from data import load_tokenizer, format_prompt_for_generation
 from training.report import TrainingReport
 
 
@@ -37,7 +37,10 @@ def load_policy_model(checkpoint_path: str, device: torch.device, rlhf_config: O
 
     model_config = checkpoint['model_config']
     model = build_model(model_config)
+    # Move empty model to device first so weights load directly into VRAM
+    model = model.to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
+    del checkpoint
 
     # Apply LoRA if configured
     if rlhf_config and rlhf_config.use_lora:
@@ -55,8 +58,8 @@ def load_policy_model(checkpoint_path: str, device: torch.device, rlhf_config: O
 
         model = apply_lora_to_model(model, model_config, lora_config_dict)
         print(f"   ✓ LoRA applied with preset: {rlhf_config.lora_preset}")
-
-    model = model.to(device)
+        # LoRA adapter weights are initialized on CPU - move them to device
+        model = model.to(device)
 
     tokenizer = load_tokenizer(model_config.tokenizer_name)
 
@@ -178,13 +181,17 @@ def generate_response_groups(
         if not prompt or not prompt.strip():
             prompt = "Hello, how are you?"
 
+        # Format prompt with role markers for consistency with SFT
+        # Format: "User: {prompt}\n\nAssistant:" - model continues from here
+        formatted_prompt = format_prompt_for_generation(prompt)
+
         responses_for_prompt = []
         log_probs_for_prompt = []
 
         # Generate multiple responses for this prompt
         for _ in range(group_size):
-            # Tokenize prompt
-            input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device).long()
+            # Tokenize formatted prompt
+            input_ids = tokenizer.encode(formatted_prompt, return_tensors="pt").to(device).long()
 
             # Skip if empty prompt
             if input_ids.size(1) == 0:
@@ -346,8 +353,9 @@ def grpo_update(
                         response_tokens = response_tokens[-(max_seq_len - 2):]
                         response_length = len(response_tokens)
 
-                    # Tokenize prompt
-                    prompt_tokens = tokenizer.encode(prompt, add_special_tokens=True)
+                    # Format and tokenize prompt with role markers
+                    formatted_prompt = format_prompt_for_generation(prompt)
+                    prompt_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=True)
 
                     # Truncate prompt if combined sequence is too long
                     max_prompt_length = max_seq_len - response_length - 1

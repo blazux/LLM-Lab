@@ -161,15 +161,7 @@ class MultiHeadAttention(nn.Module):
         # Create attention mask for sliding window if specified
         attn_mask = None
         if self.sliding_window is not None and self.sliding_window > 0:
-            # Create sliding window mask: each position can only attend to
-            # previous sliding_window positions
-            attn_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
-            attn_mask = torch.triu(attn_mask, diagonal=1)  # Causal mask
-            # Add sliding window constraint
-            for i in range(seq_len):
-                if i > self.sliding_window:
-                    attn_mask[i, :i-self.sliding_window] = True  # Mask positions beyond window
-            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
+            attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
 
         attn_output = F.scaled_dot_product_attention(
             q, k, v, attn_mask=attn_mask, is_causal=(attn_mask is None), dropout_p=self.dropout if self.training else 0.0
@@ -177,6 +169,25 @@ class MultiHeadAttention(nn.Module):
 
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
         return self.w_o(attn_output)
+
+
+def _create_sliding_window_mask(seq_len: int, sliding_window: int, device) -> torch.Tensor:
+    """Create a causal sliding window attention mask.
+
+    For scaled_dot_product_attention with bool mask:
+        True = ALLOWED to attend
+        False = masked out (cannot attend)
+
+    Returns:
+        mask: (1, 1, seq_len, seq_len) bool tensor
+    """
+    # Start with causal mask: True on lower triangle (including diagonal)
+    mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=device))
+    # Add sliding window constraint: mask out positions too far back
+    for i in range(seq_len):
+        if i > sliding_window:
+            mask[i, :i-sliding_window] = False
+    return mask.unsqueeze(0).unsqueeze(0)
 
 
 class MultiQueryAttention(nn.Module):
@@ -213,15 +224,7 @@ class MultiQueryAttention(nn.Module):
         # Create attention mask for sliding window if specified
         attn_mask = None
         if self.sliding_window is not None and self.sliding_window > 0:
-            # Create sliding window mask: each position can only attend to
-            # previous sliding_window positions
-            attn_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
-            attn_mask = torch.triu(attn_mask, diagonal=1)  # Causal mask
-            # Add sliding window constraint
-            for i in range(seq_len):
-                if i > self.sliding_window:
-                    attn_mask[i, :i-self.sliding_window] = True  # Mask positions beyond window
-            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
+            attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
 
         attn_output = F.scaled_dot_product_attention(
             q, k, v, attn_mask=attn_mask, is_causal=(attn_mask is None), dropout_p=self.dropout if self.training else 0.0
@@ -284,15 +287,7 @@ class GroupedQueryAttention(nn.Module):
         # Create attention mask for sliding window if specified
         attn_mask = None
         if self.sliding_window is not None and self.sliding_window > 0:
-            # Create sliding window mask: each position can only attend to
-            # previous sliding_window positions
-            attn_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
-            attn_mask = torch.triu(attn_mask, diagonal=1)  # Causal mask
-            # Add sliding window constraint
-            for i in range(seq_len):
-                if i > self.sliding_window:
-                    attn_mask[i, :i-self.sliding_window] = True  # Mask positions beyond window
-            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
+            attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
 
         attn_output = F.scaled_dot_product_attention(
             q, k, v,
@@ -439,15 +434,7 @@ class MultiHeadLatentAttention(nn.Module):
         # Create attention mask for sliding window if specified
         attn_mask = None
         if self.sliding_window is not None and self.sliding_window > 0:
-            # Create sliding window mask: each position can only attend to
-            # previous sliding_window positions
-            attn_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
-            attn_mask = torch.triu(attn_mask, diagonal=1)  # Causal mask
-            # Add sliding window constraint
-            for i in range(seq_len):
-                if i > self.sliding_window:
-                    attn_mask[i, :i-self.sliding_window] = True  # Mask positions beyond window
-            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
+            attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
 
         # Scaled dot-product attention (uses Flash Attention via PyTorch)
         attn_output = F.scaled_dot_product_attention(

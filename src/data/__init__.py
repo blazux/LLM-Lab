@@ -8,7 +8,11 @@ from .sft_data import (
     create_sft_dataset,
     sft_collate_fn,
     SFTDataset,
-    list_dataset_splits
+    list_dataset_splits,
+    normalize_role,
+    format_message,
+    format_prompt_for_generation,
+    format_preference_pair
 )
 
 __all__ = [
@@ -19,5 +23,9 @@ __all__ = [
     'create_sft_dataset',
     'sft_collate_fn',
     'SFTDataset',
-    'list_dataset_splits'
+    'list_dataset_splits',
+    'normalize_role',
+    'format_message',
+    'format_prompt_for_generation',
+    'format_preference_pair'
 ]

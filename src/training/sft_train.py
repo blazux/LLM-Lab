@@ -14,6 +14,7 @@ from model.factory import build_model
 from data import load_tokenizer, create_sft_dataset, sft_collate_fn
 from optimizers import setup_optimizer
 from training.report import TrainingReport
+from training.train import AdaptiveLRScheduler
 
 
 def get_trend_indicator(current, previous):
@@ -109,6 +110,21 @@ def setup_sft_scheduler(optimizer, config: SFTConfig):
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+    elif config.scheduler == "adaptive":
+        # Get base learning rate from optimizer
+        base_lr = optimizer.param_groups[0]['lr']
+        scheduler = AdaptiveLRScheduler(
+            optimizer=optimizer,
+            warmup_steps=config.warmup_steps,
+            base_lr=base_lr,
+            window_size=config.adaptive_window,
+            increase_factor=config.adaptive_increase_factor,
+            decrease_factor=config.adaptive_decrease_factor,
+            patience=config.adaptive_patience,
+            min_lr=config.adaptive_min_lr,
+            threshold=config.adaptive_threshold
+        )
+
     else:  # none
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: 1.0)
 
@@ -168,27 +184,43 @@ def train_sft(config: SFTConfig, callback=None):
     log_message(callback, "📚 Loading tokenizer and datasets...")
     tokenizer = load_tokenizer(model_config.tokenizer_name)
 
-    # Add chat special tokens for SFT
-    chat_special_tokens = ["<|user|>", "<|assistant|>", "<|system|>", "<|end|>"]
-    special_tokens_dict = {"additional_special_tokens": chat_special_tokens}
-    num_added = tokenizer.add_special_tokens(special_tokens_dict)
-    if num_added > 0:
-        print(f"   ✓ Added {num_added} chat special tokens: {chat_special_tokens}")
+    # Use text markers for chat roles instead of special tokens
+    # This avoids needing to resize embeddings and the associated training instability
+    # Format: "User: ...\n\nAssistant: ...\n\nSystem: ...\n\n"
+    #
+    # IMPORTANT: BPE tokenizers produce different tokens based on context!
+    # "Assistant:" alone tokenizes differently than "\n\nAssistant:" in context.
+    # We must tokenize in the same context as the actual data format.
+    #
+    # Extract marker tokens by tokenizing in context and finding the difference
+    def get_marker_tokens_in_context(marker_text, prefix="\n\n"):
+        """Get tokens for a marker as it appears after a prefix (e.g., newlines)"""
+        prefix_tokens = tokenizer.encode(prefix, add_special_tokens=False)
+        full_tokens = tokenizer.encode(prefix + marker_text, add_special_tokens=False)
+        # The marker tokens are everything after the prefix tokens
+        return full_tokens[len(prefix_tokens):]
 
-    # Get special token IDs for loss masking (only compute loss on assistant responses)
-    assistant_token_id = tokenizer.convert_tokens_to_ids("<|assistant|>")
-    user_token_id = tokenizer.convert_tokens_to_ids("<|user|>")
-    system_token_id = tokenizer.convert_tokens_to_ids("<|system|>")
-    print(f"   ✓ Token IDs for loss masking: assistant={assistant_token_id}, user={user_token_id}, system={system_token_id}")
+    # Get tokens for markers in different contexts
+    # BPE tokenizers produce different tokens based on preceding context
+    # So we need both standalone and after-newline versions for each marker
+    user_marker_standalone = tokenizer.encode("User:", add_special_tokens=False)
+    user_marker_newline = get_marker_tokens_in_context("User:")
+    assistant_marker_standalone = tokenizer.encode("Assistant:", add_special_tokens=False)
+    assistant_marker_newline = get_marker_tokens_in_context("Assistant:")
+    system_marker_standalone = tokenizer.encode("System:", add_special_tokens=False)
+    system_marker_newline = get_marker_tokens_in_context("System:")
 
-    # Check for vocab size mismatch
-    tokenizer_vocab_size = len(tokenizer)
-    model_vocab_size = model_config.vocab_size
-    print(f"   Tokenizer vocab size: {tokenizer_vocab_size}")
-    print(f"   Model vocab size: {model_vocab_size}")
-    if tokenizer_vocab_size != model_vocab_size:
-        print(f"   ⚠️  WARNING: Vocab size mismatch detected!")
-        print(f"   This will cause embedding errors if tokenizer produces IDs >= {model_vocab_size}")
+    print(f"   ✓ Using text markers for chat roles (no special tokens needed)")
+    print(f"   Marker tokens (context-aware):")
+    print(f"      User: standalone={user_marker_standalone}, after \\n\\n={user_marker_newline}")
+    print(f"      Assistant: standalone={assistant_marker_standalone}, after \\n\\n={assistant_marker_newline}")
+    print(f"      System: standalone={system_marker_standalone}, after \\n\\n={system_marker_newline}")
+
+    # Combine markers (both contexts) for the collate function
+    # The collate function will search for all variants
+    user_marker_tokens = (user_marker_standalone, user_marker_newline)
+    assistant_marker_tokens = (assistant_marker_standalone, assistant_marker_newline)
+    system_marker_tokens = (system_marker_standalone, system_marker_newline)
 
     # Display dataset configuration
     print("\n📊 Dataset Configuration:")
@@ -279,9 +311,10 @@ def train_sft(config: SFTConfig, callback=None):
     log_message(callback, "📊 Creating data loaders...")
     collate_with_masking = partial(
         sft_collate_fn,
-        assistant_token_id=assistant_token_id,
-        user_token_id=user_token_id,
-        system_token_id=system_token_id
+        tokenizer=tokenizer,
+        assistant_marker_tokens=assistant_marker_tokens,
+        user_marker_tokens=user_marker_tokens,
+        system_marker_tokens=system_marker_tokens
     )
     train_loader = DataLoader(
         train_dataset,
@@ -302,6 +335,73 @@ def train_sft(config: SFTConfig, callback=None):
     first_batch = next(train_iter)
     print(f"   ✓ Data pipeline ready in {time.time() - warmup_start:.1f}s", flush=True)
 
+    # Thorough data sanity check - verify multiple batches before training
+    # This catches tokenization/marker detection issues early
+    print(f"\n   📊 Data sanity check (validating marker detection)...")
+
+    x_debug, y_debug = first_batch
+    print(f"      Batch shape: x={x_debug.shape}, y={y_debug.shape}")
+
+    # Check multiple batches for marker detection issues
+    num_validation_batches = 10
+    batches_with_no_valid_tokens = 0
+    total_valid_tokens = 0
+    total_tokens_checked = 0
+
+    # Check the first batch
+    valid_in_batch = (y_debug != -100).sum().item()
+    total_in_batch = y_debug.numel()
+    total_valid_tokens += valid_in_batch
+    total_tokens_checked += total_in_batch
+    if valid_in_batch == 0:
+        batches_with_no_valid_tokens += 1
+
+    # Check additional batches
+    for _ in range(num_validation_batches - 1):
+        try:
+            x_check, y_check = next(train_iter)
+            valid_in_batch = (y_check != -100).sum().item()
+            total_in_batch = y_check.numel()
+            total_valid_tokens += valid_in_batch
+            total_tokens_checked += total_in_batch
+            if valid_in_batch == 0:
+                batches_with_no_valid_tokens += 1
+        except StopIteration:
+            break
+
+    # Report results
+    valid_ratio = total_valid_tokens / total_tokens_checked * 100 if total_tokens_checked > 0 else 0
+    print(f"      Checked {num_validation_batches} batches: {valid_ratio:.1f}% tokens are trainable")
+
+    if batches_with_no_valid_tokens > 0:
+        print(f"      ⚠️  WARNING: {batches_with_no_valid_tokens}/{num_validation_batches} batches had 0 valid tokens!")
+        print(f"         This indicates marker detection issues. Check tokenization.")
+
+    if valid_ratio < 10:
+        print(f"      ❌ CRITICAL: Only {valid_ratio:.1f}% trainable tokens - marker detection is broken!")
+        print(f"         Training will likely fail. Please check:")
+        print(f"         1. Data format matches 'User: ...\\n\\nAssistant: ...'")
+        print(f"         2. Marker tokenization is correct")
+        raise RuntimeError("Data sanity check failed: insufficient trainable tokens")
+    elif valid_ratio < 30:
+        print(f"      ⚠️  WARNING: Low trainable token ratio ({valid_ratio:.1f}%)")
+    else:
+        print(f"      ✓ Data looks healthy")
+
+    # Show sample for debugging
+    print(f"\n      Sample batch details:")
+    print(f"      First 20 x tokens: {x_debug[0, :20].tolist()}")
+    print(f"      Decoded x[:20]: {[tokenizer.decode([t]) if t > 0 else '<PAD>' for t in x_debug[0, :20].tolist()]}")
+
+    # Find and show where Assistant: marker was detected
+    masked_tokens = (y_debug[0] == -100).sum().item()
+    active_tokens = y_debug[0].numel() - masked_tokens
+    print(f"      First sequence: {masked_tokens} masked, {active_tokens} active tokens")
+
+    # Reset iterator for training (we consumed some batches for validation)
+    train_iter = iter(train_loader)
+    first_batch = next(train_iter)
+
     # Clear memory before loading model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -311,57 +411,17 @@ def train_sft(config: SFTConfig, callback=None):
     model = build_model(model_config)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Load model weights
+    # Move empty model to device first so weights load directly into VRAM.
+    # load_state_dict will then copy from CPU checkpoint → GPU model (no double RAM usage).
+    model = model.to(device=device, dtype=torch.bfloat16)
+
+    # Load model weights directly into VRAM
     model.load_state_dict(checkpoint['model_state_dict'])
 
     # Free checkpoint memory immediately after loading weights
     del checkpoint
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-
-    # Resize embeddings if vocab size mismatch
-    # Use max of len(tokenizer) and max_special_id+1 to ensure all token IDs fit
-    # (HuggingFace can assign special token IDs >= len(tokenizer))
-    max_special_id = max(tokenizer.all_special_ids) if tokenizer.all_special_ids else 0
-    required_vocab_size = max(tokenizer_vocab_size, max_special_id + 1)
-    if required_vocab_size != tokenizer_vocab_size:
-        tokenizer_vocab_size = required_vocab_size
-
-    if tokenizer_vocab_size != model_vocab_size:
-        print(f"\n🔧 Resizing embeddings from {model_vocab_size} to {tokenizer_vocab_size}...")
-
-        # Get old embeddings and their device
-        old_embeddings = model.token_embedding.weight.data
-        old_vocab_size, embedding_dim = old_embeddings.shape
-        embed_device = old_embeddings.device
-
-        # Create new embedding layer with larger vocab (on same device)
-        new_embedding = nn.Embedding(tokenizer_vocab_size, embedding_dim, device=embed_device)
-
-        # Copy old embeddings
-        new_embedding.weight.data[:old_vocab_size] = old_embeddings
-
-        # Initialize new embeddings (for the extra tokens)
-        # Use same initialization as original (normal distribution with std=0.02)
-        nn.init.normal_(new_embedding.weight.data[old_vocab_size:], mean=0.0, std=0.02)
-
-        # Replace token embedding
-        model.token_embedding = new_embedding
-
-        # Resize lm_head (output layer) as well since it's tied with embeddings
-        old_lm_head_weight = model.lm_head.weight.data
-        new_lm_head = nn.Linear(embedding_dim, tokenizer_vocab_size, bias=False, device=embed_device)
-        new_lm_head.weight.data[:old_vocab_size] = old_lm_head_weight
-        nn.init.normal_(new_lm_head.weight.data[old_vocab_size:], mean=0.0, std=0.02)
-        model.lm_head = new_lm_head
-
-        # Re-tie weights between embedding and lm_head
-        model.lm_head.weight = model.token_embedding.weight
-
-        # Update model config
-        model.config.vocab_size = tokenizer_vocab_size
-
-        print(f"   ✓ Added {tokenizer_vocab_size - old_vocab_size} new token embeddings")
 
     # Apply LoRA if configured
     if config.use_lora:
@@ -379,9 +439,9 @@ def train_sft(config: SFTConfig, callback=None):
 
         model = apply_lora_to_model(model, model_config, lora_config_dict)
         print(f"   ✓ LoRA applied with preset: {config.lora_preset}")
+        # LoRA adapter weights are initialized on CPU - move them to device
+        model = model.to(device=device, dtype=torch.bfloat16)
 
-    # Cast model to bfloat16 for memory efficiency (reduces memory usage by 50%)
-    model = model.to(device=device, dtype=torch.bfloat16)
     print(f"   Model dtype: {next(model.parameters()).dtype}")
 
     total_params = model.count_parameters()
@@ -464,6 +524,15 @@ def train_sft(config: SFTConfig, callback=None):
 
         x, y = x.to(device), y.to(device)
 
+        # Safety check: skip batches with no valid tokens to train on
+        # This can happen if marker detection fails for some data items
+        valid_tokens = (y != -100).sum().item()
+        if valid_tokens == 0:
+            print(f"\n⚠️  Step {step}: Skipping batch with 0 valid tokens (marker detection failed)")
+            step += 1
+            pbar.update(1)
+            continue
+
         # Forward pass with bfloat16
         # Gradient checkpointing: only for transformers, not for Mamba2
         # Mamba2's sequential scan + checkpointing recomputation uses more memory
@@ -480,6 +549,38 @@ def train_sft(config: SFTConfig, callback=None):
             if aux_loss is not None:
                 loss = loss + aux_loss
             loss = loss / config.gradient_accumulation_steps
+
+        # NaN detection - stop early if loss explodes
+        if torch.isnan(loss) or torch.isinf(loss):
+            print(f"\n❌ NaN/Inf loss detected at step {step}! Diagnosing...")
+
+            # Diagnose the source of NaN
+            logits_nan = torch.isnan(logits).any().item()
+            logits_inf = torch.isinf(logits).any().item()
+            y_issues = (y[y != -100] < 0).any().item() if (y != -100).any() else False
+            valid_tokens = (y != -100).sum().item()
+
+            print(f"   📊 Diagnostics:")
+            print(f"      Logits contain NaN: {logits_nan}")
+            print(f"      Logits contain Inf: {logits_inf}")
+            print(f"      Logits min/max: {logits.min().item():.2f} / {logits.max().item():.2f}")
+            print(f"      Valid tokens (not -100): {valid_tokens}")
+            print(f"      Invalid targets (negative, not -100): {y_issues}")
+            print(f"      aux_loss: {aux_loss}")
+
+            if logits_nan or logits_inf:
+                # Check model weights for NaN
+                nan_params = sum(1 for p in model.parameters() if torch.isnan(p).any())
+                inf_params = sum(1 for p in model.parameters() if torch.isinf(p).any())
+                print(f"      Model params with NaN: {nan_params}")
+                print(f"      Model params with Inf: {inf_params}")
+
+            if valid_tokens == 0:
+                print(f"      ⚠️  No valid tokens to compute loss on!")
+                print(f"      First 50 y values: {y[0, :50].tolist()}")
+
+            pbar.close()
+            raise RuntimeError(f"Training stopped: NaN/Inf loss at step {step}")
 
         # No gradient scaling needed for bfloat16 (unlike float16)
         loss.backward()
@@ -560,6 +661,16 @@ def train_sft(config: SFTConfig, callback=None):
                     callback.on_log(f"Step {step}: Val Loss={eval_metrics['val_loss']:.4f}, Val PPL={eval_metrics['val_perplexity']:.1f}", "info")
                 if hasattr(callback, 'on_eval'):
                     callback.on_eval(step, eval_metrics['val_loss'], eval_metrics['val_perplexity'])
+
+            # Notify adaptive schedulers of evaluation (for LR adjustment)
+            for scheduler in schedulers:
+                if hasattr(scheduler, 'on_eval'):
+                    adj_info = scheduler.on_eval(eval_metrics['val_loss'])
+                    if adj_info.get('adjusted'):
+                        direction_emoji = "📈" if adj_info['direction'] == 'increase' else "📉"
+                        print(f"   {direction_emoji} Adaptive LR: {adj_info['direction']} → {adj_info['new_lr']:.2e} (trend: {adj_info['trend']:.4f})")
+                        if callback and hasattr(callback, 'on_log'):
+                            callback.on_log(f"Adaptive LR {adj_info['direction']}: {adj_info['new_lr']:.2e}", "info")
 
             # Update previous values
             prev_val_loss = eval_metrics['val_loss']

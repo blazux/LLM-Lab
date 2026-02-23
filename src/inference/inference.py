@@ -28,28 +28,11 @@ def load_model_for_inference(checkpoint_path: str):
 
     model_config = checkpoint['model_config']
 
-    # Load tokenizer and validate vocab_size
+    # Load tokenizer
     tokenizer = load_tokenizer(model_config.tokenizer_name)
 
-    # Add chat special tokens (must match SFT training)
-    if is_sft or is_rlhf:
-        chat_special_tokens = ["<|user|>", "<|assistant|>", "<|system|>", "<|end|>"]
-        num_added = tokenizer.add_special_tokens({"additional_special_tokens": chat_special_tokens})
-        print(f"   Added {num_added} chat special tokens")
-        # Verify special tokens are recognized
-        for tok in chat_special_tokens:
-            tok_id = tokenizer.convert_tokens_to_ids(tok)
-            print(f"      {tok} -> ID {tok_id}")
-
-    # Match the vocab size adjustment from SFT training
-    tokenizer_vocab_size = len(tokenizer)
-    max_special_id = max(tokenizer.all_special_ids) if tokenizer.all_special_ids else 0
-    effective_vocab_size = max(tokenizer_vocab_size, max_special_id + 1)
-
-    if model_config.vocab_size != effective_vocab_size:
-        print(f"   ⚠️  WARNING: Model vocab_size ({model_config.vocab_size}) != effective tokenizer vocab_size ({effective_vocab_size})")
-        print(f"   (len(tokenizer)={tokenizer_vocab_size}, max_special_id={max_special_id})")
-        print(f"   This may indicate a tokenizer mismatch.")
+    # Note: SFT models now use text markers ("User:", "Assistant:") instead of special tokens
+    # No tokenizer modifications needed - the model already knows these tokens
 
     model = build_model(model_config)
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -107,20 +90,41 @@ def generate_text(
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
     prompt_length = input_ids.size(1)
 
+    # Debug: Show input tokens
+    print(f"DEBUG: Input to model ({prompt_length} tokens):")
+    print(f"   Token IDs: {input_ids[0].tolist()[:20]}{'...' if prompt_length > 20 else ''}")
+    print(f"   Last 5 tokens: {[tokenizer.decode([t]) for t in input_ids[0, -5:].tolist()]}")
+
     generated_tokens = input_ids[0].tolist()
 
-    for _ in range(max_tokens):
+    for step in range(max_tokens):
         # Get logits for next token
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             logits, _ = model(input_ids)  # Model returns (logits, aux_loss)
 
         # Get logits for last position
-        next_token_logits = logits[0, -1, :] / temperature
+        # Clamp temperature to avoid division by zero/near-zero
+        effective_temp = max(temperature, 1e-7) if strategy != "greedy" else 1.0
+        next_token_logits = logits[0, -1, :] / effective_temp
+
+        # Debug: Show top 5 predictions for first token
+        if step == 0:
+            top5_logits, top5_indices = torch.topk(next_token_logits * effective_temp, 5)  # Undo temperature for display
+            top5_probs = torch.softmax(top5_logits, dim=-1)
+            print(f"DEBUG: Top 5 predictions for first generated token:")
+            for i, (idx, prob) in enumerate(zip(top5_indices.tolist(), top5_probs.tolist())):
+                token_str = tokenizer.decode([idx])
+                print(f"   {i+1}. '{token_str}' (id={idx}, prob={prob:.3f})")
 
         # Apply repetition penalty
+        # For positive logits: divide by penalty (makes smaller = less likely)
+        # For negative logits: multiply by penalty (makes more negative = less likely)
         if repetition_penalty != 1.0:
             for token_id in set(generated_tokens):
-                next_token_logits[token_id] /= repetition_penalty
+                if next_token_logits[token_id] < 0:
+                    next_token_logits[token_id] *= repetition_penalty
+                else:
+                    next_token_logits[token_id] /= repetition_penalty
 
         # Sampling strategies
         if strategy == "greedy":
@@ -237,8 +241,8 @@ def interactive_inference(checkpoint_path: str):
 
         # Apply chat template if this is a chat model
         if is_chat_model:
-            # Use custom chat format matching SFT training
-            formatted_prompt = f"<|user|>{prompt}<|end|>\n<|assistant|>"
+            # Use text markers matching SFT training format
+            formatted_prompt = f"User: {prompt}\n\nAssistant:"
             # Debug: show tokenization
             debug_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=False)
             print(f"DEBUG: Formatted prompt: {repr(formatted_prompt)}")
