@@ -1,6 +1,12 @@
 import torch
 import torch.nn as nn
 
+try:
+    import bitsandbytes as bnb
+    HAS_BNB = True
+except ImportError:
+    HAS_BNB = False
+
 
 # ============================================================================
 # MUON OPTIMIZER
@@ -182,18 +188,31 @@ def setup_optimizer(model: nn.Module, config):
                 adamw_params.append(param)
 
         muon_optimizer = Muon(muon_params, lr=lr, momentum=config.muon_momentum, nesterov=config.muon_nesterov)
-        adamw_optimizer = torch.optim.AdamW(adamw_params, lr=lr * 0.1, weight_decay=config.weight_decay)
+        if HAS_BNB:
+            adamw_optimizer = bnb.optim.AdamW8bit(adamw_params, lr=lr * 0.1, weight_decay=config.weight_decay)
+        else:
+            adamw_optimizer = torch.optim.AdamW(adamw_params, lr=lr * 0.1, weight_decay=config.weight_decay)
 
         return [muon_optimizer, adamw_optimizer]
 
     elif optimizer_name == "adamw":
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=lr,
-            betas=(config.adamw_beta1, config.adamw_beta2),
-            eps=config.adamw_eps,
-            weight_decay=config.weight_decay
-        )
+        if HAS_BNB:
+            optimizer = bnb.optim.AdamW8bit(
+                model.parameters(),
+                lr=lr,
+                betas=(config.adamw_beta1, config.adamw_beta2),
+                eps=config.adamw_eps,
+                weight_decay=config.weight_decay
+            )
+        else:
+            print("bitsandbytes not installed, using 32-bit AdamW")
+            optimizer = torch.optim.AdamW(
+                model.parameters(),
+                lr=lr,
+                betas=(config.adamw_beta1, config.adamw_beta2),
+                eps=config.adamw_eps,
+                weight_decay=config.weight_decay
+            )
         return [optimizer]
 
     elif optimizer_name == "lion":
@@ -217,12 +236,18 @@ def setup_optimizer(model: nn.Module, config):
             return [optimizer]
         except ImportError:
             print("Adafactor requires transformers library. Falling back to AdamW.")
-            optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=config.weight_decay)
+            if HAS_BNB:
+                optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=lr, weight_decay=config.weight_decay)
+            else:
+                optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=config.weight_decay)
             return [optimizer]
 
     else:
         print(f"Unknown optimizer: {optimizer_name}. Falling back to AdamW.")
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=config.weight_decay)
+        if HAS_BNB:
+            optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=lr, weight_decay=config.weight_decay)
+        else:
+            optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=config.weight_decay)
         return [optimizer]
 
 

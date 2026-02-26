@@ -5,3 +5,4 @@ tqdm>=4.65.0
 peft>=0.4.0
 fpdf2>=2.7.0
 matplotlib>=3.7.0
+bitsandbytes>=0.43.0
