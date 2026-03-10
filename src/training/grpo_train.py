@@ -210,7 +210,7 @@ def generate_response_groups(
                 current_input = current_input.long()
 
                 with autocast(device_type="cuda", dtype=torch.bfloat16):
-                    logits = model(current_input)
+                    logits, _ = model(current_input)
 
                 # Get logits for last position
                 next_token_logits = logits[0, -1, :] / config.grpo_temperature
@@ -369,7 +369,7 @@ def grpo_update(
                     input_ids = torch.tensor([combined_tokens], dtype=torch.long, device=device)
 
                     with autocast(device_type="cuda", dtype=torch.bfloat16):
-                        logits = model(input_ids)
+                        logits, _ = model(input_ids)
 
                     # Properly shift logits and labels for language modeling
                     # The model predicts token at position i using logits at position i-1

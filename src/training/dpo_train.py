@@ -174,11 +174,11 @@ def compute_log_probs(model, tokenizer, prompts, responses, device, requires_gra
         if requires_grad:
             # Policy model - keep gradients
             with autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = model(input_ids)
+                logits, _ = model(input_ids)
         else:
             # Reference model - no gradients
             with torch.no_grad(), autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = model(input_ids)
+                logits, _ = model(input_ids)
 
         # Get logits for response tokens
         response_logits = logits[0, -response_length-1:-1, :]
@@ -186,7 +186,7 @@ def compute_log_probs(model, tokenizer, prompts, responses, device, requires_gra
 
         # Compute log probabilities
         log_probs_tensor = F.log_softmax(response_logits, dim=-1)
-        token_log_probs = log_probs_tensor.gather(1, response_token_ids.unsqueeze(1)).squeeze()
+        token_log_probs = log_probs_tensor.gather(1, response_token_ids.unsqueeze(1)).squeeze(1)
 
         # Average log prob over tokens
         mean_log_prob = token_log_probs.mean()

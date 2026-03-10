@@ -59,20 +59,20 @@ class TransformerBlock(nn.Module):
         # Dropout
         self.dropout = nn.Dropout(config.dropout)
 
-    def forward(self, x):
+    def forward(self, x, past_key_values=None, start_pos=0):
         # Pre-norm architecture
-        attn_out = self.attention(self.norm1(x))
+        attn_out, new_kv = self.attention(self.norm1(x), past_key_values=past_key_values, start_pos=start_pos)
         x = x + self.dropout(attn_out)
 
         # Feed-forward (handle MoE aux loss)
         if self.is_moe:
             ff_out, aux_loss = self.feed_forward(self.norm2(x))
             x = x + self.dropout(ff_out)
-            return x, aux_loss
+            return x, aux_loss, new_kv
         else:
             ff_out = self.feed_forward(self.norm2(x))
             x = x + self.dropout(ff_out)
-            return x, None
+            return x, None, new_kv
 
 
 class TransformerLLM(nn.Module):
@@ -150,17 +150,21 @@ class TransformerLLM(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, x=None, input_ids=None, use_checkpoint: bool = False, **kwargs):
+    def forward(self, x=None, input_ids=None, use_checkpoint: bool = False,
+                past_key_values=None, use_cache: bool = False, **kwargs):
         """
         Forward pass
         Args:
             x: input token ids (batch, seq_len) - for backward compatibility
             input_ids: input token ids (batch, seq_len) - for PEFT compatibility
             use_checkpoint: whether to use gradient checkpointing
+            past_key_values: list of (k, v) tuples per layer for KV cache
+            use_cache: whether to return updated KV cache
 
         Returns:
             logits: (batch, seq_len, vocab_size)
             aux_loss: MoE auxiliary loss (or None if no MoE layers)
+            past_key_values (optional): updated KV cache (only if use_cache=True)
         """
         # Handle both calling conventions (x for legacy, input_ids for PEFT)
         if input_ids is not None:
@@ -171,32 +175,53 @@ class TransformerLLM(nn.Module):
         # Embedding with scaling
         x = self.token_embedding(x) * math.sqrt(self.config.d_model)
 
-        # Positional encoding (only for sinusoidal)
+        # Compute start_pos for positional encoding (needed during KV cache decode)
+        pos_start = 0
+        if past_key_values is not None and len(past_key_values) > 0:
+            pos_start = past_key_values[0][0].size(2)
+
+        # Positional encoding (only for sinusoidal/learned — RoPE/YARN/ALiBi applied in attention)
         if self.pos_encoding is not None:
-            x = self.pos_encoding(x)
+            x = self.pos_encoding(x, pos_start)
         x = self.position_dropout(x)
 
-        # Transformer blocks (accumulate MoE aux loss)
+        # Transformer blocks (accumulate MoE aux loss, thread KV cache)
         total_aux_loss = None
-        for block in self.transformer_blocks:
+        moe_layer_count = 0
+        new_past_key_values = [] if use_cache else None
+
+        for i, block in enumerate(self.transformer_blocks):
+            layer_past = past_key_values[i] if past_key_values is not None else None
+            start_pos = layer_past[0].size(2) if layer_past is not None else 0
+
             if use_checkpoint and self.training:
-                # Note: gradient checkpointing with MoE returns both x and aux_loss
-                x, aux_loss = checkpoint(block, x, use_reentrant=False)
+                # Gradient checkpointing is training-only; never combined with use_cache
+                x, aux_loss, _ = checkpoint(block, x, use_reentrant=False)
             else:
-                x, aux_loss = block(x)
+                x, aux_loss, new_kv = block(x, past_key_values=layer_past, start_pos=start_pos)
+
+            if use_cache:
+                new_past_key_values.append(new_kv)
 
             # Accumulate aux loss from MoE layers
             if aux_loss is not None:
+                moe_layer_count += 1
                 if total_aux_loss is None:
                     total_aux_loss = aux_loss
                 else:
                     total_aux_loss = total_aux_loss + aux_loss
+
+        # Normalize aux loss by number of MoE layers to keep scale independent of depth
+        if total_aux_loss is not None and moe_layer_count > 1:
+            total_aux_loss = total_aux_loss / moe_layer_count
 
         # Final normalization and output
         x = self.norm(x)
         x = self.output_dropout(x)
         logits = self.lm_head(x)
 
+        if use_cache:
+            return logits, total_aux_loss, new_past_key_values
         return logits, total_aux_loss
 
     def count_parameters(self):
@@ -204,14 +229,12 @@ class TransformerLLM(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     # PEFT compatibility methods
-    def prepare_inputs_for_generation(self, input_ids, **kwargs):
-        """Prepare inputs for generation (PEFT compatibility)"""
-        return {"input_ids": input_ids}
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
+        return {"input_ids": input_ids, "past_key_values": past_key_values, "use_cache": True}
 
     def _reorder_cache(self, past_key_values, beam_idx):
-        """Reorder cache for beam search (PEFT compatibility)"""
-        # Not used in training, but PEFT may check for it
-        return past_key_values
+        return [(k.index_select(0, beam_idx), v.index_select(0, beam_idx))
+                for k, v in past_key_values]
 
     def get_input_embeddings(self):
         """Get input embedding layer (PEFT compatibility)"""

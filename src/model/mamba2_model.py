@@ -64,7 +64,8 @@ class Mamba2LLM(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, x=None, input_ids=None, use_checkpoint: bool = False, **kwargs):
+    def forward(self, x=None, input_ids=None, use_checkpoint: bool = False,
+                past_key_values=None, use_cache: bool = False, **kwargs):
         """
         Forward pass
 
@@ -98,7 +99,9 @@ class Mamba2LLM(nn.Module):
         x = self.output_dropout(x)
         logits = self.lm_head(x)
 
-        return logits
+        if use_cache:
+            return logits, None, []  # Mamba2 has no KV cache
+        return logits, None
 
     def count_parameters(self):
         """Count total trainable parameters"""

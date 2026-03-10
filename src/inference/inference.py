@@ -69,118 +69,65 @@ def generate_text(
     repetition_penalty: float = 1.0,
     strategy: str = "top_p"
 ):
-    """
-    Generate text from a prompt
-
-    Args:
-        model: the language model
-        tokenizer: the tokenizer
-        device: torch device
-        prompt: input text
-        max_tokens: maximum tokens to generate
-        temperature: sampling temperature
-        top_k: top-k sampling parameter
-        top_p: nucleus sampling parameter
-        repetition_penalty: penalty for repeating tokens
-        strategy: sampling strategy ("greedy", "top_k", "top_p", "beam")
-    """
     model.eval()
 
-    # Tokenize prompt
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
     prompt_length = input_ids.size(1)
-
-    # Debug: Show input tokens
-    print(f"DEBUG: Input to model ({prompt_length} tokens):")
-    print(f"   Token IDs: {input_ids[0].tolist()[:20]}{'...' if prompt_length > 20 else ''}")
-    print(f"   Last 5 tokens: {[tokenizer.decode([t]) for t in input_ids[0, -5:].tolist()]}")
-
     generated_tokens = input_ids[0].tolist()
 
+    # Prefill: run full prompt through model to populate KV cache
+    with autocast(device_type="cuda", dtype=torch.bfloat16):
+        logits, _, past_key_values = model(input_ids, use_cache=True)
+    # logits: (1, prompt_len, vocab_size) — use last position for first token
+    next_token_logits = logits[0, -1, :]
+
     for step in range(max_tokens):
-        # Get logits for next token
-        with autocast(device_type="cuda", dtype=torch.bfloat16):
-            logits, _ = model(input_ids)  # Model returns (logits, aux_loss)
-
-        # Get logits for last position
-        # Clamp temperature to avoid division by zero/near-zero
         effective_temp = max(temperature, 1e-7) if strategy != "greedy" else 1.0
-        next_token_logits = logits[0, -1, :] / effective_temp
-
-        # Debug: Show top 5 predictions for first token
-        if step == 0:
-            top5_logits, top5_indices = torch.topk(next_token_logits * effective_temp, 5)  # Undo temperature for display
-            top5_probs = torch.softmax(top5_logits, dim=-1)
-            print(f"DEBUG: Top 5 predictions for first generated token:")
-            for i, (idx, prob) in enumerate(zip(top5_indices.tolist(), top5_probs.tolist())):
-                token_str = tokenizer.decode([idx])
-                print(f"   {i+1}. '{token_str}' (id={idx}, prob={prob:.3f})")
+        scaled_logits = next_token_logits / effective_temp
 
         # Apply repetition penalty
-        # For positive logits: divide by penalty (makes smaller = less likely)
-        # For negative logits: multiply by penalty (makes more negative = less likely)
         if repetition_penalty != 1.0:
             for token_id in set(generated_tokens):
-                if next_token_logits[token_id] < 0:
-                    next_token_logits[token_id] *= repetition_penalty
+                if scaled_logits[token_id] < 0:
+                    scaled_logits[token_id] *= repetition_penalty
                 else:
-                    next_token_logits[token_id] /= repetition_penalty
+                    scaled_logits[token_id] /= repetition_penalty
 
-        # Sampling strategies
+        # Sampling
         if strategy == "greedy":
-            next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
-
+            next_token = torch.argmax(scaled_logits, dim=-1, keepdim=True)
         elif strategy == "top_k":
-            # Top-k sampling
-            top_k_logits, top_k_indices = torch.topk(next_token_logits, top_k)
+            top_k_logits, top_k_indices = torch.topk(scaled_logits, top_k)
             probs = F.softmax(top_k_logits, dim=-1)
             next_token_idx = torch.multinomial(probs, num_samples=1)
             next_token = top_k_indices[next_token_idx]
-
-        elif strategy == "top_p":
-            # Nucleus (top-p) sampling
-            sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
-            cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-
-            # Remove tokens with cumulative probability above threshold
-            sorted_indices_to_remove = cumulative_probs > top_p
-            sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
-            sorted_indices_to_remove[0] = False
-
-            indices_to_remove = sorted_indices[sorted_indices_to_remove]
-            next_token_logits[indices_to_remove] = float('-inf')
-
-            probs = F.softmax(next_token_logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
-
-        else:  # default to top_p
-            sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+        else:  # top_p (default)
+            sorted_logits, sorted_indices = torch.sort(scaled_logits, descending=True)
             cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
             sorted_indices_to_remove = cumulative_probs > top_p
             sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
             sorted_indices_to_remove[0] = False
-            indices_to_remove = sorted_indices[sorted_indices_to_remove]
-            next_token_logits[indices_to_remove] = float('-inf')
-            probs = F.softmax(next_token_logits, dim=-1)
+            scaled_logits[sorted_indices[sorted_indices_to_remove]] = float('-inf')
+            probs = F.softmax(scaled_logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
 
-        # Check for EOS
         if next_token.item() == tokenizer.eos_token_id:
             break
 
-        # Append to sequence
         generated_tokens.append(next_token.item())
-        input_ids = torch.cat([input_ids, next_token.unsqueeze(0)], dim=1)
 
-        # Truncate if sequence gets too long
+        # Incremental decode: feed only the new token
+        next_input = next_token.unsqueeze(0)  # (1, 1)
         max_len = model.config.max_seq_len
-        if input_ids.size(1) > max_len:
-            input_ids = input_ids[:, -max_len:]
+        if len(generated_tokens) >= max_len:
+            break
 
-    # Decode only the newly generated tokens (not the prompt)
+        with autocast(device_type="cuda", dtype=torch.bfloat16):
+            logits, _, past_key_values = model(next_input, past_key_values=past_key_values, use_cache=True)
+        next_token_logits = logits[0, 0, :]
+
     new_tokens = generated_tokens[prompt_length:]
-    generated_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
-    return generated_text
+    return tokenizer.decode(new_tokens, skip_special_tokens=True)
 
 
 def interactive_inference(checkpoint_path: str):
@@ -243,12 +190,6 @@ def interactive_inference(checkpoint_path: str):
         if is_chat_model:
             # Use text markers matching SFT training format
             formatted_prompt = f"User: {prompt}\n\nAssistant:"
-            # Debug: show tokenization
-            debug_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=False)
-            print(f"DEBUG: Formatted prompt: {repr(formatted_prompt)}")
-            print(f"DEBUG: Token IDs: {debug_tokens[:20]}{'...' if len(debug_tokens) > 20 else ''}")
-            print(f"DEBUG: Decoded tokens: {[tokenizer.decode([t]) for t in debug_tokens[:10]]}")
-            print()
         else:
             formatted_prompt = prompt
 

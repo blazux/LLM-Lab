@@ -3,6 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+try:
+    from flash_attn import flash_attn_func
+    _FLASH_ATTN_AVAILABLE = True
+except ImportError:
+    _FLASH_ATTN_AVAILABLE = False
+
 
 # ============================================================================
 # POSITIONAL ENCODINGS
@@ -18,10 +24,10 @@ class LearnedPositional(nn.Module):
         super().__init__()
         self.position_embeddings = nn.Embedding(max_seq_len, d_model)
 
-    def forward(self, x):
+    def forward(self, x, start_pos: int = 0):
         """x: (batch, seq_len, d_model)"""
         seq_len = x.size(1)
-        positions = torch.arange(seq_len, device=x.device).unsqueeze(0)
+        positions = torch.arange(start_pos, start_pos + seq_len, device=x.device).unsqueeze(0)
         return x + self.position_embeddings(positions)
 
 
@@ -36,9 +42,10 @@ class SinusoidalPositional(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe)
 
-    def forward(self, x):
+    def forward(self, x, start_pos: int = 0):
         """x: (batch, seq_len, d_model)"""
-        return x + self.pe[:x.size(1), :]
+        seq_len = x.size(1)
+        return x + self.pe[start_pos:start_pos + seq_len, :]
 
 
 class RoPE(nn.Module):
@@ -52,11 +59,12 @@ class RoPE(nn.Module):
         self.register_buffer('cos', theta.cos(), persistent=False)
         self.register_buffer('sin', theta.sin(), persistent=False)
 
-    def forward(self, x_BTHD: torch.Tensor):
+    def forward(self, x_BTHD: torch.Tensor, start_pos: int = 0):
         """x: (batch, n_heads, seq_len, d_k)"""
-        assert self.cos.size(0) >= x_BTHD.size(-2)
-        cos = self.cos[None, None, :x_BTHD.size(-2), :]
-        sin = self.sin[None, None, :x_BTHD.size(-2), :]
+        seq_len = x_BTHD.size(-2)
+        assert self.cos.size(0) >= start_pos + seq_len
+        cos = self.cos[None, None, start_pos:start_pos + seq_len, :]
+        sin = self.sin[None, None, start_pos:start_pos + seq_len, :]
         x1, x2 = x_BTHD.to(dtype=torch.float32).chunk(2, dim=-1)
         y1 = x1 * cos + x2 * sin
         y2 = x1 * (-sin) + x2 * cos
@@ -87,9 +95,22 @@ class ALiBi(nn.Module):
                     ALiBi._get_slopes(2 * closest_power_of_2)[0::2][:n_heads - closest_power_of_2])
 
     def get_bias(self, seq_len: int):
-        """Returns bias for attention: (n_heads, seq_len, seq_len)"""
-        causal_mask = torch.triu(torch.ones(seq_len, seq_len) * float('-inf'), diagonal=1)
-        return self.bias[:, :seq_len].unsqueeze(1) + causal_mask.to(self.bias.device)
+        """Returns bias for attention: (n_heads, seq_len, seq_len) with causal mask included.
+
+        ALiBi bias for query i attending to key j is: -slope * (i - j).
+        Future positions (j > i) are set to -inf (causal mask).
+        """
+        query_idx = torch.arange(seq_len, device=self.bias.device).unsqueeze(1)  # (seq_len, 1)
+        key_idx = torch.arange(seq_len, device=self.bias.device).unsqueeze(0)    # (1, seq_len)
+        distance = (query_idx - key_idx).clamp(min=0)  # (seq_len, seq_len)
+        rel_bias = self.bias[:, distance]  # (n_heads, seq_len, seq_len)
+        causal_mask = query_idx < key_idx  # True where j > i (future)
+        rel_bias = rel_bias.masked_fill(causal_mask, float('-inf'))
+        return rel_bias  # (n_heads, seq_len, seq_len)
+
+    def get_slopes(self) -> torch.Tensor:
+        """Return positive slope values (n_heads,) for flash_attn alibi_slopes parameter."""
+        return -self.bias[:, 1].float()  # flash_attn requires fp32 slopes
 
 
 class YARN(nn.Module):
@@ -105,11 +126,12 @@ class YARN(nn.Module):
         self.register_buffer('cos', theta.cos(), persistent=False)
         self.register_buffer('sin', theta.sin(), persistent=False)
 
-    def forward(self, x_BTHD: torch.Tensor):
+    def forward(self, x_BTHD: torch.Tensor, start_pos: int = 0):
         """x: (batch, n_heads, seq_len, d_k)"""
-        assert self.cos.size(0) >= x_BTHD.size(-2)
-        cos = self.cos[None, None, :x_BTHD.size(-2), :]
-        sin = self.sin[None, None, :x_BTHD.size(-2), :]
+        seq_len = x_BTHD.size(-2)
+        assert self.cos.size(0) >= start_pos + seq_len
+        cos = self.cos[None, None, start_pos:start_pos + seq_len, :]
+        sin = self.sin[None, None, start_pos:start_pos + seq_len, :]
         x1, x2 = x_BTHD.to(dtype=torch.float32).chunk(2, dim=-1)
         y1 = x1 * cos + x2 * sin
         y2 = x1 * (-sin) + x2 * cos
@@ -147,7 +169,7 @@ class MultiHeadAttention(nn.Module):
         # Position encoding (will be set by model)
         self.pos_encoding = None
 
-    def forward(self, x):
+    def forward(self, x, past_key_values=None, start_pos=0):
         batch_size, seq_len = x.size(0), x.size(1)
 
         q = self.q_proj(x).view(batch_size, seq_len, self.n_heads, self.d_k).transpose(1, 2)
@@ -155,20 +177,65 @@ class MultiHeadAttention(nn.Module):
         v = self.v_proj(x).view(batch_size, seq_len, self.n_heads, self.d_k).transpose(1, 2)
 
         if self.pos_encoding is not None and isinstance(self.pos_encoding, (RoPE, YARN)):
-            q = self.pos_encoding(q)
-            k = self.pos_encoding(k)
+            q = self.pos_encoding(q, start_pos)
+            k = self.pos_encoding(k, start_pos)
 
-        # Create attention mask for sliding window if specified
+        # KV cache: append new K/V to past; truncate only when decoding (cache active)
+        if past_key_values is not None:
+            k = torch.cat([past_key_values[0], k], dim=2)
+            v = torch.cat([past_key_values[1], v], dim=2)
+            if self.sliding_window is not None and self.sliding_window > 0 and k.size(2) > self.sliding_window:
+                k = k[:, :, -self.sliding_window:, :]
+                v = v[:, :, -self.sliding_window:, :]
+        new_kv = (k.detach(), v.detach())
+        kv_len = k.size(2)
+
+        # Flash attention for full-sequence sliding window passes (no KV cache active)
+        use_flash = (
+            _FLASH_ATTN_AVAILABLE
+            and self.sliding_window is not None and self.sliding_window > 0
+            and past_key_values is None
+            and x.is_cuda
+            and q.dtype in (torch.float16, torch.bfloat16)
+        )
+        if use_flash:
+            q_fa = q.transpose(1, 2)
+            k_fa = k.transpose(1, 2)
+            v_fa = v.transpose(1, 2)
+            alibi_slopes = self.pos_encoding.get_slopes() if isinstance(self.pos_encoding, ALiBi) else None
+            fa_kwargs = dict(dropout_p=self.dropout if self.training else 0.0, causal=True, window_size=(self.sliding_window, 0))
+            if alibi_slopes is not None:
+                fa_kwargs["alibi_slopes"] = alibi_slopes
+            attn_output = flash_attn_func(q_fa, k_fa, v_fa, **fa_kwargs)
+            attn_output = attn_output.reshape(batch_size, seq_len, self.d_model)
+            return self.w_o(attn_output), new_kv
+
+        # SDPA fallback path
         attn_mask = None
-        if self.sliding_window is not None and self.sliding_window > 0:
+        is_causal = past_key_values is None  # during decode, all K/V are past so no masking needed
+
+        if past_key_values is None and self.sliding_window is not None and self.sliding_window > 0:
             attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
+            is_causal = False
+
+        if self.pos_encoding is not None and isinstance(self.pos_encoding, ALiBi):
+            if past_key_values is not None:
+                # Decode step: q at position (kv_len-1) attending to all cached keys
+                key_idx = torch.arange(kv_len, device=x.device)
+                distances = (kv_len - 1 - key_idx).clamp(min=0)
+                attn_bias = self.pos_encoding.bias[:, distances].unsqueeze(0).unsqueeze(2)  # (1, n_heads, 1, kv_len)
+            else:
+                attn_bias = self.pos_encoding.get_bias(kv_len).unsqueeze(0)
+                if attn_mask is not None:
+                    attn_bias = attn_bias.masked_fill(~attn_mask, float('-inf'))
+            attn_mask = attn_bias
+            is_causal = False
 
         attn_output = F.scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask, is_causal=(attn_mask is None), dropout_p=self.dropout if self.training else 0.0
+            q, k, v, attn_mask=attn_mask, is_causal=is_causal, dropout_p=self.dropout if self.training else 0.0
         )
-
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
-        return self.w_o(attn_output)
+        return self.w_o(attn_output), new_kv
 
 
 def _create_sliding_window_mask(seq_len: int, sliding_window: int, device) -> torch.Tensor:
@@ -207,7 +274,7 @@ class MultiQueryAttention(nn.Module):
 
         self.pos_encoding = None
 
-    def forward(self, x):
+    def forward(self, x, past_key_values=None, start_pos=0):
         batch_size, seq_len = x.size(0), x.size(1)
 
         q = self.q_proj(x).view(batch_size, seq_len, self.n_heads, self.d_k).transpose(1, 2)
@@ -215,23 +282,67 @@ class MultiQueryAttention(nn.Module):
         v = self.v_proj(x).view(batch_size, seq_len, 1, self.d_k).transpose(1, 2)
 
         if self.pos_encoding is not None and isinstance(self.pos_encoding, (RoPE, YARN)):
-            q = self.pos_encoding(q)
-            k = self.pos_encoding(k)
+            q = self.pos_encoding(q, start_pos)
+            k = self.pos_encoding(k, start_pos)
 
-        k = repeat_kv(k, self.n_heads)
-        v = repeat_kv(v, self.n_heads)
+        # KV cache (compact single-head k/v, before repeat); truncate only when decoding
+        if past_key_values is not None:
+            k = torch.cat([past_key_values[0], k], dim=2)
+            v = torch.cat([past_key_values[1], v], dim=2)
+            if self.sliding_window is not None and self.sliding_window > 0 and k.size(2) > self.sliding_window:
+                k = k[:, :, -self.sliding_window:, :]
+                v = v[:, :, -self.sliding_window:, :]
+        new_kv = (k.detach(), v.detach())
+        kv_len = k.size(2)
 
-        # Create attention mask for sliding window if specified
+        # Flash attention (MQA natively supported, no repeat needed)
+        use_flash = (
+            _FLASH_ATTN_AVAILABLE
+            and self.sliding_window is not None and self.sliding_window > 0
+            and past_key_values is None
+            and x.is_cuda
+            and q.dtype in (torch.float16, torch.bfloat16)
+        )
+        if use_flash:
+            q_fa = q.transpose(1, 2)
+            k_fa = k.transpose(1, 2)
+            v_fa = v.transpose(1, 2)
+            alibi_slopes = self.pos_encoding.get_slopes() if isinstance(self.pos_encoding, ALiBi) else None
+            fa_kwargs = dict(dropout_p=self.dropout if self.training else 0.0, causal=True, window_size=(self.sliding_window, 0))
+            if alibi_slopes is not None:
+                fa_kwargs["alibi_slopes"] = alibi_slopes
+            attn_output = flash_attn_func(q_fa, k_fa, v_fa, **fa_kwargs)
+            attn_output = attn_output.reshape(batch_size, seq_len, self.d_model)
+            return self.w_o(attn_output), new_kv
+
+        # SDPA fallback: expand k/v to full heads
+        k_expanded = repeat_kv(k, self.n_heads)
+        v_expanded = repeat_kv(v, self.n_heads)
+
         attn_mask = None
-        if self.sliding_window is not None and self.sliding_window > 0:
+        is_causal = past_key_values is None
+
+        if past_key_values is None and self.sliding_window is not None and self.sliding_window > 0:
             attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
+            is_causal = False
+
+        if self.pos_encoding is not None and isinstance(self.pos_encoding, ALiBi):
+            if past_key_values is not None:
+                key_idx = torch.arange(kv_len, device=x.device)
+                distances = (kv_len - 1 - key_idx).clamp(min=0)
+                attn_bias = self.pos_encoding.bias[:, distances].unsqueeze(0).unsqueeze(2)
+            else:
+                attn_bias = self.pos_encoding.get_bias(kv_len).unsqueeze(0)
+                if attn_mask is not None:
+                    attn_bias = attn_bias.masked_fill(~attn_mask, float('-inf'))
+            attn_mask = attn_bias
+            is_causal = False
 
         attn_output = F.scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask, is_causal=(attn_mask is None), dropout_p=self.dropout if self.training else 0.0
+            q, k_expanded, v_expanded, attn_mask=attn_mask, is_causal=is_causal, dropout_p=self.dropout if self.training else 0.0
         )
-
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
-        return self.w_o(attn_output)
+        return self.w_o(attn_output), new_kv
 
 
 class GroupedQueryAttention(nn.Module):
@@ -261,43 +372,87 @@ class GroupedQueryAttention(nn.Module):
 
         self.pos_encoding = None
 
-    def forward(self, x):
+    def forward(self, x, past_key_values=None, start_pos=0):
         batch_size, seq_len = x.size(0), x.size(1)
 
         q = self.q_proj(x).view(batch_size, seq_len, self.n_heads, self.d_k)
         k = self.k_proj(x).view(batch_size, seq_len, self.n_kv_heads, self.d_k)
         v = self.v_proj(x).view(batch_size, seq_len, self.n_kv_heads, self.d_k)
 
-        # QK normalization
+        # QK normalization (on last dim, works in NHWD layout)
         q = self.q_norm(q)
         k = self.k_norm(k)
 
-        # Transpose to (batch, n_heads, seq_len, d_k)
+        # Transpose to (batch, n_heads, seq_len, d_k) for RoPE and SDPA
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
         if self.pos_encoding is not None and isinstance(self.pos_encoding, (RoPE, YARN)):
-            q = self.pos_encoding(q)
-            k = self.pos_encoding(k)
+            q = self.pos_encoding(q, start_pos)
+            k = self.pos_encoding(k, start_pos)
 
-        k = repeat_kv(k, self.n_kv_groups)
-        v = repeat_kv(v, self.n_kv_groups)
+        # KV cache (compact n_kv_heads, before repeat); truncate only when decoding
+        if past_key_values is not None:
+            k = torch.cat([past_key_values[0], k], dim=2)
+            v = torch.cat([past_key_values[1], v], dim=2)
+            if self.sliding_window is not None and self.sliding_window > 0 and k.size(2) > self.sliding_window:
+                k = k[:, :, -self.sliding_window:, :]
+                v = v[:, :, -self.sliding_window:, :]
+        new_kv = (k.detach(), v.detach())
+        kv_len = k.size(2)
 
-        # Create attention mask for sliding window if specified
+        # Flash attention (GQA natively supported, no repeat needed)
+        use_flash = (
+            _FLASH_ATTN_AVAILABLE
+            and self.sliding_window is not None and self.sliding_window > 0
+            and past_key_values is None
+            and x.is_cuda
+            and q.dtype in (torch.float16, torch.bfloat16)
+        )
+        if use_flash:
+            q_fa = q.transpose(1, 2)
+            k_fa = k.transpose(1, 2)
+            v_fa = v.transpose(1, 2)
+            alibi_slopes = self.pos_encoding.get_slopes() if isinstance(self.pos_encoding, ALiBi) else None
+            fa_kwargs = dict(dropout_p=self.dropout if self.training else 0.0, causal=True, window_size=(self.sliding_window, 0))
+            if alibi_slopes is not None:
+                fa_kwargs["alibi_slopes"] = alibi_slopes
+            attn_output = flash_attn_func(q_fa, k_fa, v_fa, **fa_kwargs)
+            attn_output = attn_output.reshape(batch_size, seq_len, self.d_model)
+            return self.w_o(attn_output), new_kv
+
+        # SDPA fallback: expand k/v to full heads
+        k_expanded = repeat_kv(k, self.n_kv_groups)
+        v_expanded = repeat_kv(v, self.n_kv_groups)
+
         attn_mask = None
-        if self.sliding_window is not None and self.sliding_window > 0:
+        is_causal = past_key_values is None
+
+        if past_key_values is None and self.sliding_window is not None and self.sliding_window > 0:
             attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
+            is_causal = False
+
+        if self.pos_encoding is not None and isinstance(self.pos_encoding, ALiBi):
+            if past_key_values is not None:
+                key_idx = torch.arange(kv_len, device=x.device)
+                distances = (kv_len - 1 - key_idx).clamp(min=0)
+                attn_bias = self.pos_encoding.bias[:, distances].unsqueeze(0).unsqueeze(2)
+            else:
+                attn_bias = self.pos_encoding.get_bias(kv_len).unsqueeze(0)
+                if attn_mask is not None:
+                    attn_bias = attn_bias.masked_fill(~attn_mask, float('-inf'))
+            attn_mask = attn_bias
+            is_causal = False
 
         attn_output = F.scaled_dot_product_attention(
-            q, k, v,
+            q, k_expanded, v_expanded,
             attn_mask=attn_mask,
-            is_causal=(attn_mask is None),  # Use is_causal only if no custom mask
+            is_causal=is_causal,
             dropout_p=self.dropout if self.training else 0.0
         )
-
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
-        return self.w_o(attn_output)
+        return self.w_o(attn_output), new_kv
 
 
 class MultiHeadLatentAttention(nn.Module):
@@ -366,25 +521,24 @@ class MultiHeadLatentAttention(nn.Module):
 
         self.pos_encoding = None
 
-    def forward(self, x):
+    def forward(self, x, past_key_values=None, start_pos=0):
         batch_size, seq_len = x.size(0), x.size(1)
 
         # Q: Standard projection
         q = self.q_proj(x).view(batch_size, seq_len, self.n_heads, self.d_k)
 
         # K/V: Compress through latent bottleneck
-        latent = self.kv_down(x)  # (batch, seq, d_latent)
+        latent = self.kv_down(x)
 
-        # V: Standard up-projection (always the same)
+        # V: Standard up-projection
         v = self.v_proj(latent).view(batch_size, seq_len, self.n_heads, self.d_k)
 
         # K projection depends on positional encoding type
         if self.positional_encoding in ["rope", "yarn"]:
-            # Split K into RoPE and non-RoPE components (DeepSeek-V2 style)
             k_rope = self.k_rope_proj(latent).view(batch_size, seq_len, self.n_heads, self.d_rope_latent)
             k_nope = self.k_nope_proj(latent).view(batch_size, seq_len, self.n_heads, self.d_k - self.d_rope_latent)
 
-            # Apply QK normalization before RoPE
+            # QK norm on Q before transpose
             q = self.q_norm(q)
 
             # Transpose to (batch, n_heads, seq_len, d_k)
@@ -393,60 +547,88 @@ class MultiHeadLatentAttention(nn.Module):
             k_nope = k_nope.transpose(1, 2)
             v = v.transpose(1, 2)
 
-            # Apply RoPE to Q and K_rope components
+            # Apply RoPE with start_pos
             if self.pos_encoding is not None and isinstance(self.pos_encoding, (RoPE, YARN)):
-                # Split Q into RoPE and non-RoPE parts
                 q_rope = q[..., :self.d_rope_latent]
                 q_nope = q[..., self.d_rope_latent:]
-
-                # Apply RoPE
-                q_rope = self.pos_encoding(q_rope)
-                k_rope = self.pos_encoding(k_rope)
-
-                # Recombine Q
+                q_rope = self.pos_encoding(q_rope, start_pos)
+                k_rope = self.pos_encoding(k_rope, start_pos)
                 q = torch.cat([q_rope, q_nope], dim=-1)
 
-            # Concatenate K components
             k = torch.cat([k_rope, k_nope], dim=-1)
 
-        else:
-            # Standard path for sinusoidal/alibi (no RoPE splitting)
-            k = self.k_proj(latent).view(batch_size, seq_len, self.n_heads, self.d_k)
+            # K normalization (after concat, in NCHW layout)
+            k = k.transpose(1, 2)
+            k = self.k_norm(k)
+            k = k.transpose(1, 2)
 
-            # Apply QK normalization
+        else:
+            # Standard path for sinusoidal/alibi
+            k = self.k_proj(latent).view(batch_size, seq_len, self.n_heads, self.d_k)
             q = self.q_norm(q)
             k = self.k_norm(k)
-
-            # Transpose to (batch, n_heads, seq_len, d_k)
             q = q.transpose(1, 2)
             k = k.transpose(1, 2)
             v = v.transpose(1, 2)
 
-            # Note: Sinusoidal is added to embeddings, ALiBi is handled via attention bias
-            # Neither requires special handling in attention mechanism
+        # KV cache; truncate only when decoding (cache active)
+        if past_key_values is not None:
+            k = torch.cat([past_key_values[0], k], dim=2)
+            v = torch.cat([past_key_values[1], v], dim=2)
+            if self.sliding_window is not None and self.sliding_window > 0 and k.size(2) > self.sliding_window:
+                k = k[:, :, -self.sliding_window:, :]
+                v = v[:, :, -self.sliding_window:, :]
+        new_kv = (k.detach(), v.detach())
+        kv_len = k.size(2)
 
-        # Apply K normalization (for RoPE path, needs to be after concat)
-        if self.positional_encoding in ["rope", "yarn"]:
-            k = k.transpose(1, 2)  # Back to (batch, seq_len, n_heads, d_k)
-            k = self.k_norm(k)
-            k = k.transpose(1, 2)  # Back to (batch, n_heads, seq_len, d_k)
+        # Flash attention for full-sequence sliding window passes
+        use_flash = (
+            _FLASH_ATTN_AVAILABLE
+            and self.sliding_window is not None and self.sliding_window > 0
+            and past_key_values is None
+            and x.is_cuda
+            and q.dtype in (torch.float16, torch.bfloat16)
+        )
+        if use_flash:
+            q_fa = q.transpose(1, 2)
+            k_fa = k.transpose(1, 2)
+            v_fa = v.transpose(1, 2)
+            alibi_slopes = self.pos_encoding.get_slopes() if isinstance(self.pos_encoding, ALiBi) else None
+            fa_kwargs = dict(dropout_p=self.dropout if self.training else 0.0, causal=True, window_size=(self.sliding_window, 0))
+            if alibi_slopes is not None:
+                fa_kwargs["alibi_slopes"] = alibi_slopes
+            attn_output = flash_attn_func(q_fa, k_fa, v_fa, **fa_kwargs)
+            attn_output = attn_output.reshape(batch_size, seq_len, self.n_heads * self.d_k)
+            return self.w_o(attn_output), new_kv
 
-        # Create attention mask for sliding window if specified
+        # SDPA fallback
         attn_mask = None
-        if self.sliding_window is not None and self.sliding_window > 0:
-            attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
+        is_causal = past_key_values is None
 
-        # Scaled dot-product attention (uses Flash Attention via PyTorch)
+        if past_key_values is None and self.sliding_window is not None and self.sliding_window > 0:
+            attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
+            is_causal = False
+
+        if self.pos_encoding is not None and isinstance(self.pos_encoding, ALiBi):
+            if past_key_values is not None:
+                key_idx = torch.arange(kv_len, device=x.device)
+                distances = (kv_len - 1 - key_idx).clamp(min=0)
+                attn_bias = self.pos_encoding.bias[:, distances].unsqueeze(0).unsqueeze(2)
+            else:
+                attn_bias = self.pos_encoding.get_bias(kv_len).unsqueeze(0)
+                if attn_mask is not None:
+                    attn_bias = attn_bias.masked_fill(~attn_mask, float('-inf'))
+            attn_mask = attn_bias
+            is_causal = False
+
         attn_output = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=attn_mask,
-            is_causal=(attn_mask is None),
+            is_causal=is_causal,
             dropout_p=self.dropout if self.training else 0.0
         )
-
-        # Reshape and project output
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.n_heads * self.d_k)
-        return self.w_o(attn_output)
+        return self.w_o(attn_output), new_kv
 
 
 # ============================================================================
@@ -622,7 +804,7 @@ class MoEFFN(nn.Module):
 
             # Get routing weights for this expert
             # Find position of this expert in topk for each token
-            expert_weights = torch.zeros(token_expert_mask.sum(), device=x.device)
+            expert_weights = torch.zeros(token_expert_mask.sum(), device=x.device, dtype=x.dtype)
             for k in range(self.num_experts_per_token):
                 mask_k = expert_mask[token_expert_mask, k]  # Tokens where this expert is in position k
                 expert_weights[mask_k] = topk_probs[token_expert_mask, k][mask_k]

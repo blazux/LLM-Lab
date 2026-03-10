@@ -202,7 +202,7 @@ def generate_responses(
             current_input = current_input.long()
 
             with autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = model(current_input)
+                logits, _ = model(current_input)
 
             # Get logits for last position
             next_token_logits = logits[0, -1, :] / config.temperature
@@ -350,7 +350,7 @@ def ppo_update(
                 input_ids = torch.tensor([combined_tokens], dtype=torch.long, device=device)
 
                 with autocast(device_type="cuda", dtype=torch.bfloat16):
-                    logits = model(input_ids)
+                    logits, _ = model(input_ids)
 
                 # Get logits for response tokens
                 response_logits = logits[0, -response_length-1:-1, :]
@@ -358,7 +358,7 @@ def ppo_update(
 
                 # Compute log probabilities
                 log_probs = F.log_softmax(response_logits, dim=-1)
-                token_log_probs = log_probs.gather(1, response_token_ids.unsqueeze(1)).squeeze()
+                token_log_probs = log_probs.gather(1, response_token_ids.unsqueeze(1)).squeeze(1)
                 mean_log_prob = token_log_probs.mean()
 
                 # Compute entropy
