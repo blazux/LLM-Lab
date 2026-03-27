@@ -16,6 +16,7 @@ from model.factory import build_model
 from optimizers import setup_optimizer
 from data import StreamingTokenDataset, lm_collate_fn, load_tokenizer, create_token_stream
 from training.report import TrainingReport
+from training.maxis_loss import MAXISLoss
 
 
 class AdaptiveLRScheduler:
@@ -575,6 +576,21 @@ def train_model(
         output_dir=output_dir,
     )
 
+    # Setup loss function
+    use_maxis = train_config.loss_fn == "maxis"
+    if use_maxis:
+        maxis_loss_fn = MAXISLoss(
+            embed_weight=model.lm_head.weight,
+            vocab_size=model_config.vocab_size,
+            low_rank_dim=train_config.maxis_low_rank_dim,
+            n_candidates=train_config.maxis_n_candidates,
+            chunk_size=train_config.maxis_chunk_size,
+            aux_weight=train_config.maxis_aux_weight,
+        )
+        print(f"\n⚡ Using MAXIS loss (n_candidates={train_config.maxis_n_candidates}, low_rank_dim={train_config.maxis_low_rank_dim})")
+    else:
+        maxis_loss_fn = None
+
     # Training loop
     print(f"\n🚀 Starting training from step {start_step}...")
     if callback and hasattr(callback, 'on_log'):
@@ -616,8 +632,12 @@ def train_model(
             # Mamba2's sequential scan + checkpointing recomputation uses more memory
             use_checkpoint = (model_config.model_architecture == "transformer")
             with autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits, aux_loss = model(x, use_checkpoint=use_checkpoint)
-                loss = F.cross_entropy(logits.view(-1, model_config.vocab_size), y.view(-1))
+                out, aux_loss = model(x, use_checkpoint=use_checkpoint, return_hidden=use_maxis)
+                if use_maxis:
+                    # out is pre-lm_head hidden states [B, T, d]; targets are [B, T]
+                    loss = maxis_loss_fn(out[:, :-1].reshape(-1, model_config.d_model), y.view(-1))
+                else:
+                    loss = F.cross_entropy(out.view(-1, model_config.vocab_size), y.view(-1))
                 # Add MoE auxiliary loss if present
                 if aux_loss is not None:
                     loss = loss + aux_loss
@@ -644,11 +664,15 @@ def train_model(
             # Logging
             if step % 10 == 0:
                 with torch.no_grad():
-                    predictions = logits.argmax(dim=-1)
-                    accuracy = (predictions == y).float().mean().item()
                     current_loss = loss.item() * train_config.gradient_accumulation_steps
                     perplexity = math.exp(min(current_loss, 20))
                     current_lr = optimizers[0].param_groups[0]['lr']
+                    if use_maxis:
+                        # Full logits not available with MAXIS — skip token accuracy
+                        accuracy = float('nan')
+                    else:
+                        predictions = out.argmax(dim=-1)
+                        accuracy = (predictions == y).float().mean().item()
 
                 pbar.set_postfix({
                     'loss': f'{current_loss:.4f}',

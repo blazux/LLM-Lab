@@ -389,6 +389,14 @@ class TrainingConfig:
     eval_steps: int = 100
     save_best_only: bool = True
 
+    # Loss function
+    loss_fn: str = "cross_entropy"  # "cross_entropy" or "maxis"
+    # MAXIS loss hyperparameters (only used when loss_fn="maxis")
+    maxis_low_rank_dim: int = 64     # Dimension for scout pass and aux loss
+    maxis_n_candidates: int = 2048   # Negative samples per chunk
+    maxis_chunk_size: int = 32       # Tokens per inner loop iteration
+    maxis_aux_weight: float = 0.2    # Weight of the Matryoshka auxiliary loss
+
     # Datasets
     datasets: list = None
 

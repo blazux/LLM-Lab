@@ -65,7 +65,8 @@ class Mamba2LLM(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, x=None, input_ids=None, use_checkpoint: bool = False,
-                past_key_values=None, use_cache: bool = False, **kwargs):
+                past_key_values=None, use_cache: bool = False,
+                return_hidden: bool = False, **kwargs):
         """
         Forward pass
 
@@ -97,6 +98,13 @@ class Mamba2LLM(nn.Module):
         # Final normalization and output
         x = self.norm(x)
         x = self.output_dropout(x)
+
+        if return_hidden:
+            # Return pre-lm_head hidden states (used by MAXIS loss)
+            if use_cache:
+                return x, None, []
+            return x, None
+
         logits = self.lm_head(x)
 
         if use_cache:

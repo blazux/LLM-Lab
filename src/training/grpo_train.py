@@ -741,7 +741,6 @@ def train_grpo(config: RLHFConfig, callback=None):
     # Clean up GPU memory
     print("\n🧹 Cleaning up GPU memory...")
     del policy_model
-    del ref_model
     del reward_model
     del optimizer
     if torch.cuda.is_available():

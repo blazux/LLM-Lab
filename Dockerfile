@@ -31,6 +31,19 @@ COPY gui/frontend/ ./
 # Build frontend for production
 RUN npm run build
 
+# ---- GUI v2 ----
+FROM node:20-slim AS frontend-v2-builder
+
+WORKDIR /app/gui-v2/frontend
+
+COPY gui-v2/frontend/package*.json ./
+RUN npm ci
+
+COPY gui-v2/frontend/ ./
+
+# Build with /v2/ base path so it can be served alongside v1
+RUN npm run build -- --base=/v2/
+
 # Main stage - CUDA-enabled base image
 FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
 
@@ -77,8 +90,9 @@ COPY src/ ./src/
 COPY gui/backend/ ./gui/backend/
 COPY llm-lab.sh ./
 
-# Copy built frontend from builder stage
+# Copy built frontends from builder stages
 COPY --from=frontend-builder /app/gui/frontend/dist ./gui/frontend/dist
+COPY --from=frontend-v2-builder /app/gui-v2/frontend/dist ./gui-v2/frontend/dist
 
 # Create necessary directories
 RUN mkdir -p data/checkpoints \

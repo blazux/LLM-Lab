@@ -17,6 +17,9 @@ Sections:
   13. Gradient checkpointing: backward works with use_checkpoint=True
   14. DPO loss function: dpo_loss() returns finite loss + correct accuracy sign
   15. Sliding window mask: verify out-of-window positions are masked
+  ...
+  23. SFT multi-turn masking: only assistant tokens unmasked, USER boundary is correct
+  24. Training cleanup: del statements in train_grpo/train_ppo only reference defined vars
 """
 import sys
 import os
@@ -801,6 +804,126 @@ def test_single_token_input():
 
 
 # ---------------------------------------------------------------------------
+# 23. SFT multi-turn token masking — assistant-only loss, correct positions
+# ---------------------------------------------------------------------------
+def test_sft_masking_multi_turn():
+    print("\n[23] SFT multi-turn token masking — only assistant tokens unmasked")
+    from data.sft_data import sft_collate_fn
+
+    # Synthetic 2-turn conversation (all single-token markers for simplicity):
+    #   seq = [1, 2, USER(3), 10, 11, ASST(4), 20, 21, 22, USER(3), 10, 11, ASST(4), 30, 31]
+    #   idx =  0  1     2     3   4      5      6   7   8     9     10  11    12      13  14
+    # x = seq[:-1]  (indices 0–13)
+    # y = seq[1:]   (indices 0–13, shifted left by 1)
+    # Expected unmasked in y:
+    #   y[5]=20, y[6]=21, y[7]=22   — first assistant response
+    #   y[12]=30, y[13]=31          — second assistant response
+    # Everything else must be -100 (including the USER marker token at y[8]=seq[9]=3)
+    USER_MARKER = [3]
+    ASST_MARKER = [4]
+    seq = torch.tensor([1, 2, 3, 10, 11, 4, 20, 21, 22, 3, 10, 11, 4, 30, 31], dtype=torch.long)
+
+    name = "sft_masking_multi_turn"
+    try:
+        x, y = sft_collate_fn(
+            [seq],
+            tokenizer=None,
+            assistant_marker_tokens=ASST_MARKER,
+            user_marker_tokens=USER_MARKER,
+        )
+        y0 = y[0]
+
+        # First assistant response — must be unmasked
+        assert y0[5].item() == 20, f"y[5] should be 20 (asst tok), got {y0[5].item()}"
+        assert y0[6].item() == 21, f"y[6] should be 21 (asst tok), got {y0[6].item()}"
+        assert y0[7].item() == 22, f"y[7] should be 22 (asst tok), got {y0[7].item()}"
+
+        # Second assistant response — must be unmasked
+        assert y0[12].item() == 30, f"y[12] should be 30 (asst tok), got {y0[12].item()}"
+        assert y0[13].item() == 31, f"y[13] should be 31 (asst tok), got {y0[13].item()}"
+
+        # USER marker that immediately follows the first assistant response — must be masked
+        # y[8] = seq[9] = 3 (USER marker); the old bug left this unmasked
+        assert y0[8].item() == -100, \
+            f"y[8] (USER marker after asst response) should be -100, got {y0[8].item()}"
+
+        # User content tokens — must be masked
+        assert y0[9].item() == -100, f"y[9] (user content) should be -100, got {y0[9].item()}"
+        assert y0[10].item() == -100, f"y[10] (user content) should be -100, got {y0[10].item()}"
+
+        # Prefix before any assistant turn — must be masked
+        for i in range(5):
+            assert y0[i].item() == -100, f"y[{i}] (prefix) should be -100, got {y0[i].item()}"
+
+        ok(name)
+    except Exception as e:
+        fail(name, e)
+
+
+# ---------------------------------------------------------------------------
+# 24. Training cleanup — no `del` on undefined variables (GRPO / PPO)
+# ---------------------------------------------------------------------------
+def test_training_cleanup_no_undefined_vars():
+    print("\n[24] Training cleanup — del statements only reference defined variables")
+    import ast
+    import inspect
+    import textwrap
+
+    try:
+        import training.grpo_train as grpo_module
+        import training.ppo_train as ppo_module
+    except Exception as e:
+        fail("training_cleanup_import", e)
+        return
+
+    test_cases = [
+        (grpo_module.train_grpo, "train_grpo"),
+        (ppo_module.train_ppo,   "train_ppo"),
+    ]
+
+    for func, func_name in test_cases:
+        name = f"{func_name}_cleanup_vars"
+        try:
+            source = textwrap.dedent(inspect.getsource(func))
+            tree = ast.parse(source)
+
+            def collect_names(target):
+                """Recursively collect all Name ids from an assignment target."""
+                if isinstance(target, ast.Name):
+                    assigned.add(target.id)
+                elif isinstance(target, (ast.Tuple, ast.List)):
+                    for elt in target.elts:
+                        collect_names(elt)
+
+            # Collect names that are assigned anywhere in the function
+            assigned = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign):
+                    for t in node.targets:
+                        collect_names(t)
+                elif isinstance(node, ast.AnnAssign):
+                    collect_names(node.target)
+                elif isinstance(node, ast.FunctionDef):
+                    for arg in node.args.args:
+                        assigned.add(arg.arg)
+
+            # Collect names that are deleted
+            deleted = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Delete):
+                    for t in node.targets:
+                        if isinstance(t, ast.Name):
+                            deleted.add(t.id)
+
+            undefined_dels = deleted - assigned
+            assert not undefined_dels, \
+                f"del on never-assigned variables: {undefined_dels}"
+            ok(f"{name} (dels={sorted(deleted)})")
+        except Exception as e:
+            fail(name, e)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def run_all():
@@ -834,6 +957,8 @@ def run_all():
         test_lora,
         test_mamba2_backward,
         test_single_token_input,
+        test_sft_masking_multi_turn,
+        test_training_cleanup_no_undefined_vars,
     ]
 
     section_fails = 0

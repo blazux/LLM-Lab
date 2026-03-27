@@ -87,6 +87,12 @@ export interface TrainingConfigData {
   sophia_beta1?: number;
   sophia_beta2?: number;
   sophia_rho?: number;
+  // Loss function
+  loss_fn?: string;
+  maxis_n_candidates?: number;
+  maxis_low_rank_dim?: number;
+  maxis_chunk_size?: number;
+  maxis_aux_weight?: number;
 }
 
 export interface SFTConfigData {
@@ -139,6 +145,12 @@ export interface SFTConfigData {
   sophia_beta1?: number;
   sophia_beta2?: number;
   sophia_rho?: number;
+  // Loss function
+  loss_fn?: string;
+  maxis_n_candidates?: number;
+  maxis_low_rank_dim?: number;
+  maxis_chunk_size?: number;
+  maxis_aux_weight?: number;
 }
 
 export async function startTraining(

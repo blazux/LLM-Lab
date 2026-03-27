@@ -15,6 +15,7 @@ from data import load_tokenizer, create_sft_dataset, sft_collate_fn
 from optimizers import setup_optimizer
 from training.report import TrainingReport
 from training.train import AdaptiveLRScheduler
+from training.maxis_loss import MAXISLoss
 
 
 def get_trend_indicator(current, previous):
@@ -496,6 +497,21 @@ def train_sft(config: SFTConfig, callback=None):
         output_dir=config.output_dir,
     )
 
+    # Setup loss function
+    use_maxis = config.loss_fn == "maxis"
+    if use_maxis:
+        maxis_loss_fn = MAXISLoss(
+            embed_weight=model.lm_head.weight,
+            vocab_size=model_config.vocab_size,
+            low_rank_dim=config.maxis_low_rank_dim,
+            n_candidates=config.maxis_n_candidates,
+            chunk_size=config.maxis_chunk_size,
+            aux_weight=config.maxis_aux_weight,
+        )
+        log_message(callback, f"⚡ Using MAXIS loss (n_candidates={config.maxis_n_candidates})", "info")
+    else:
+        maxis_loss_fn = None
+
     # Training loop
     log_message(callback, "🚀 Starting SFT training...", "success")
     model.train()
@@ -538,13 +554,20 @@ def train_sft(config: SFTConfig, callback=None):
         # Mamba2's sequential scan + checkpointing recomputation uses more memory
         use_checkpoint = (model_config.model_architecture == "transformer")
         with autocast(device_type="cuda", dtype=torch.bfloat16):
-            logits, aux_loss = model(x, use_checkpoint=use_checkpoint)
-            # Ignore padding tokens (-100) in loss
-            loss = F.cross_entropy(
-                logits.view(-1, model.config.vocab_size),
-                y.view(-1),
-                ignore_index=-100
-            )
+            out, aux_loss = model(x, use_checkpoint=use_checkpoint, return_hidden=use_maxis)
+            if use_maxis:
+                # Mask out -100 targets; MAXIS has no ignore_index so we filter manually
+                valid_mask = (y.view(-1) != -100)
+                loss = maxis_loss_fn(
+                    out[:, :-1].reshape(-1, model_config.d_model)[valid_mask],
+                    y.view(-1)[valid_mask],
+                )
+            else:
+                loss = F.cross_entropy(
+                    out.view(-1, model.config.vocab_size),
+                    y.view(-1),
+                    ignore_index=-100,
+                )
             # Add MoE auxiliary loss if present
             if aux_loss is not None:
                 loss = loss + aux_loss
@@ -554,26 +577,27 @@ def train_sft(config: SFTConfig, callback=None):
         if torch.isnan(loss) or torch.isinf(loss):
             print(f"\n❌ NaN/Inf loss detected at step {step}! Diagnosing...")
 
-            # Diagnose the source of NaN
-            logits_nan = torch.isnan(logits).any().item()
-            logits_inf = torch.isinf(logits).any().item()
             y_issues = (y[y != -100] < 0).any().item() if (y != -100).any() else False
             valid_tokens = (y != -100).sum().item()
 
             print(f"   📊 Diagnostics:")
-            print(f"      Logits contain NaN: {logits_nan}")
-            print(f"      Logits contain Inf: {logits_inf}")
-            print(f"      Logits min/max: {logits.min().item():.2f} / {logits.max().item():.2f}")
+            if not use_maxis:
+                out_nan = torch.isnan(out).any().item()
+                out_inf = torch.isinf(out).any().item()
+                print(f"      Logits contain NaN: {out_nan}")
+                print(f"      Logits contain Inf: {out_inf}")
+                print(f"      Logits min/max: {out.min().item():.2f} / {out.max().item():.2f}")
+            else:
+                hidden_nan = torch.isnan(out).any().item()
+                print(f"      Hidden states contain NaN: {hidden_nan}")
             print(f"      Valid tokens (not -100): {valid_tokens}")
             print(f"      Invalid targets (negative, not -100): {y_issues}")
             print(f"      aux_loss: {aux_loss}")
 
-            if logits_nan or logits_inf:
-                # Check model weights for NaN
-                nan_params = sum(1 for p in model.parameters() if torch.isnan(p).any())
-                inf_params = sum(1 for p in model.parameters() if torch.isinf(p).any())
-                print(f"      Model params with NaN: {nan_params}")
-                print(f"      Model params with Inf: {inf_params}")
+            nan_params = sum(1 for p in model.parameters() if torch.isnan(p).any())
+            inf_params = sum(1 for p in model.parameters() if torch.isinf(p).any())
+            print(f"      Model params with NaN: {nan_params}")
+            print(f"      Model params with Inf: {inf_params}")
 
             if valid_tokens == 0:
                 print(f"      ⚠️  No valid tokens to compute loss on!")
@@ -603,11 +627,14 @@ def train_sft(config: SFTConfig, callback=None):
         # Logging
         if step % config.log_every == 0:
             with torch.no_grad():
-                predictions = logits.argmax(dim=-1)
-                valid_mask = (y != -100)
-                accuracy = ((predictions == y) & valid_mask).float().sum() / valid_mask.float().sum()
                 current_loss = loss.item() * config.gradient_accumulation_steps
                 perplexity = math.exp(min(current_loss, 20))
+                if use_maxis:
+                    accuracy = float('nan')
+                else:
+                    predictions = out.argmax(dim=-1)
+                    valid_mask = (y != -100)
+                    accuracy = ((predictions == y) & valid_mask).float().sum() / valid_mask.float().sum()
 
             pbar.set_postfix({
                 'loss': f'{current_loss:.4f}',

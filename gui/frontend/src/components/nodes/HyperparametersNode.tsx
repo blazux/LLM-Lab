@@ -13,6 +13,11 @@ interface HyperparametersNodeProps {
     grad_clip?: number;
     eval_every?: number;
     eval_steps?: number;
+    loss_fn?: string;
+    maxis_n_candidates?: number;
+    maxis_low_rank_dim?: number;
+    maxis_chunk_size?: number;
+    maxis_aux_weight?: number;
   };
 }
 
@@ -34,6 +39,9 @@ export default memo(({ data }: HyperparametersNodeProps) => {
           <div className="text-slate-400 text-xs mt-0.5 space-y-0.5">
             {data.batch_size && <div>batch: {data.batch_size}</div>}
             {data.max_steps && <div>steps: {data.max_steps}</div>}
+            {data.loss_fn && data.loss_fn !== 'cross_entropy' && (
+              <div className="text-amber-400">loss: {data.loss_fn}</div>
+            )}
           </div>
         </div>
       </div>

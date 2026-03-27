@@ -76,6 +76,14 @@ class SFTConfig:
     lora_alpha: int = 16  # LoRA alpha (scaling factor)
     lora_dropout: float = 0.05  # LoRA dropout rate
 
+    # Loss function
+    loss_fn: str = "cross_entropy"  # "cross_entropy" or "maxis"
+    # MAXIS loss hyperparameters (only used when loss_fn="maxis")
+    maxis_low_rank_dim: int = 64
+    maxis_n_candidates: int = 2048
+    maxis_chunk_size: int = 32
+    maxis_aux_weight: float = 0.2
+
     # Sequence length (will be inferred from model if not set)
     max_seq_len: Optional[int] = None
 

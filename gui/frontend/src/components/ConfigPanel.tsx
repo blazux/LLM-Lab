@@ -1523,6 +1523,81 @@ const ConfigPanel = ({ node, onClose, onUpdate }: ConfigPanelProps) => {
                 Number of batches to use for each evaluation
               </p>
             </div>
+            <div className="border-t border-slate-700 pt-4">
+              <label className="text-sm font-medium text-slate-300 mb-2 block">
+                Loss Function
+              </label>
+              <select
+                value={node.data.loss_fn || 'cross_entropy'}
+                onChange={(e) => {
+                  const fn = e.target.value;
+                  if (fn === 'maxis') {
+                    onUpdate(node.id, {
+                      ...node.data,
+                      loss_fn: 'maxis',
+                      maxis_n_candidates: node.data.maxis_n_candidates ?? 2048,
+                      maxis_low_rank_dim: node.data.maxis_low_rank_dim ?? 64,
+                      maxis_chunk_size: node.data.maxis_chunk_size ?? 32,
+                      maxis_aux_weight: node.data.maxis_aux_weight ?? 0.2,
+                    });
+                  } else {
+                    handleChange('loss_fn', fn);
+                  }
+                }}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <option value="cross_entropy">Cross Entropy</option>
+                <option value="maxis">MAXIS (Sampled Softmax)</option>
+              </select>
+              <p className="text-xs text-slate-400 mt-1">
+                MAXIS avoids materialising the full logit matrix — faster training and less VRAM at the cost of an approximated loss signal.
+              </p>
+            </div>
+            {(node.data.loss_fn === 'maxis') && (
+              <div className="space-y-3 pl-3 border-l-2 border-amber-500/40">
+                <p className="text-xs text-amber-400 font-medium">MAXIS hyperparameters</p>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Candidates (n_candidates)</label>
+                  <input
+                    type="number"
+                    value={node.data.maxis_n_candidates ?? 2048}
+                    onChange={(e) => handleChange('maxis_n_candidates', parseInt(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <p className="text-xs text-slate-500 mt-0.5">Negative samples per chunk — higher = closer to true CE, more VRAM</p>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Low-rank dim</label>
+                  <input
+                    type="number"
+                    value={node.data.maxis_low_rank_dim ?? 64}
+                    onChange={(e) => handleChange('maxis_low_rank_dim', parseInt(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <p className="text-xs text-slate-500 mt-0.5">Dimension used for scout pass and Matryoshka aux loss</p>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Chunk size</label>
+                  <input
+                    type="number"
+                    value={node.data.maxis_chunk_size ?? 32}
+                    onChange={(e) => handleChange('maxis_chunk_size', parseInt(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1 block">Aux loss weight</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={node.data.maxis_aux_weight ?? 0.2}
+                    onChange={(e) => handleChange('maxis_aux_weight', parseFloat(e.target.value))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <p className="text-xs text-slate-500 mt-0.5">Weight of the Matryoshka low-rank auxiliary loss</p>
+                </div>
+              </div>
+            )}
           </div>
         );
 

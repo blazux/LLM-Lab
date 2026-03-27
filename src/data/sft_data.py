@@ -394,10 +394,11 @@ def sft_collate_fn(batch, tokenizer=None, assistant_marker_tokens=None, user_mar
             stop_positions = []
             if user_marker_tokens is not None:
                 user_matches = find_all_marker_positions(x[i], user_marker_tokens)
-                stop_positions.extend([pos for pos, _ in user_matches])
+                # Adjust to y-space: x[pos] appears at y[pos-1], so stop before y[pos-1]
+                stop_positions.extend([pos - 1 for pos, _ in user_matches])
             if system_marker_tokens is not None:
                 system_matches = find_all_marker_positions(x[i], system_marker_tokens)
-                stop_positions.extend([pos for pos, _ in system_matches])
+                stop_positions.extend([pos - 1 for pos, _ in system_matches])
             stop_positions = sorted(stop_positions)
 
             # For each "Assistant:" marker, unmask until the next User:/System: marker

@@ -36,36 +36,48 @@ app.include_router(inference_router, prefix="/api/inference", tags=["inference"]
 app.include_router(merge_router, prefix="/api/merge", tags=["merge"])
 app.include_router(export_router, prefix="/api/export", tags=["export"])
 
-# Check if built frontend exists (for Docker deployment)
-frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
-if frontend_dist.exists():
-    # Mount static files
-    app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+# Built frontend paths
+frontend_v1_dist = Path(__file__).parent.parent / "frontend" / "dist"
+frontend_v2_dist = Path(__file__).parent.parent.parent / "gui-v2" / "frontend" / "dist"
 
-    # Serve index.html for all non-API routes (SPA routing)
-    @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        # Don't intercept API routes or docs
-        if full_path.startswith("api") or full_path.startswith("docs"):
-            return {"error": "Not found"}
+# Mount v1 static assets
+if frontend_v1_dist.exists():
+    app.mount("/assets", StaticFiles(directory=str(frontend_v1_dist / "assets")), name="assets")
 
-        # Serve static files if they exist
-        file_path = frontend_dist / full_path
+# Mount v2 static assets (built with --base=/v2/, so assets live at /v2/assets/...)
+if frontend_v2_dist.exists():
+    app.mount("/v2/assets", StaticFiles(directory=str(frontend_v2_dist / "assets")), name="assets-v2")
+
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    # Don't intercept API routes or docs
+    if full_path.startswith("api") or full_path.startswith("docs"):
+        return {"error": "Not found"}
+
+    # Serve v2 SPA for /v2/* routes
+    if full_path == "v2" or full_path.startswith("v2/"):
+        if frontend_v2_dist.exists():
+            # Strip leading "v2/" to resolve actual file (e.g. v2/favicon.ico)
+            relative = full_path[3:].lstrip("/") if full_path.startswith("v2/") else ""
+            if relative:
+                candidate = frontend_v2_dist / relative
+                if candidate.is_file():
+                    return FileResponse(candidate)
+            return FileResponse(frontend_v2_dist / "index.html")
+
+    # Serve v1 SPA for all other routes
+    if frontend_v1_dist.exists():
+        file_path = frontend_v1_dist / full_path
         if file_path.is_file():
             return FileResponse(file_path)
+        return FileResponse(frontend_v1_dist / "index.html")
 
-        # Otherwise serve index.html (SPA)
-        return FileResponse(frontend_dist / "index.html")
-else:
-    # Development mode - API only
-    @app.get("/")
-    async def root():
-        return {
-            "message": "LLM Lab GUI API",
-            "docs": "/docs",
-            "version": "1.0.0",
-            "note": "Frontend not built. Run from Docker or build frontend separately."
-        }
+    return {
+        "message": "LLM Lab GUI API",
+        "docs": "/docs",
+        "version": "1.0.0",
+        "note": "Frontend not built. Run from Docker or build frontend separately."
+    }
 
 if __name__ == "__main__":
     import uvicorn

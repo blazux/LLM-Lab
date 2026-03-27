@@ -325,6 +325,12 @@ const TrainingCanvas = ({
         grad_clip: hyperparamsNode?.data.grad_clip || 1.0,
         eval_every: hyperparamsNode?.data.eval_every || 500,
         eval_steps: hyperparamsNode?.data.eval_steps || 100,
+        // Loss function
+        loss_fn: hyperparamsNode?.data.loss_fn || 'cross_entropy',
+        maxis_low_rank_dim: hyperparamsNode?.data.maxis_low_rank_dim ?? 64,
+        maxis_n_candidates: hyperparamsNode?.data.maxis_n_candidates ?? 2048,
+        maxis_chunk_size: hyperparamsNode?.data.maxis_chunk_size ?? 32,
+        maxis_aux_weight: hyperparamsNode?.data.maxis_aux_weight ?? 0.2,
         // AdamW-specific
         adamw_beta1: optimizerNode.data.beta1 || 0.9,
         adamw_beta2: optimizerNode.data.beta2 || 0.999,
