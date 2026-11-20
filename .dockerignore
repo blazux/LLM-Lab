@@ -35,11 +35,27 @@ cache
 outputs
 gui/backend/cache
 
-# Docs
-docs
-*.md
-LICENSE
+# Public documentation is part of the release artifact.
+docs/release-evidence
+docs/roadmap-1.0.md
+docs/release-validation.md
+docs/assets/reference-learning.png
 
 # Test files
-test_*
 todos
+
+# Exclude generated directories at every depth, not only repository root.
+**/venv
+**/.venv
+**/node_modules
+**/__pycache__
+**/cache
+**/dist
+
+# Never send local experiment data or workstation credentials to the builder.
+/data/**
+.aws
+.agents
+.codex
+.env
+**/.env*

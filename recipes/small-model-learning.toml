@@ -1,0 +1,61 @@
+version = 1
+
+[experiment]
+name = "What does a small model learn?"
+seed = 42
+device = "cpu"
+threads = 4
+
+[data]
+format = "text"
+train = "learning-data/train.txt"
+validation = "learning-data/validation.txt"
+
+[tokenizer]
+type = "byte_bpe"
+vocab_size = 512
+min_frequency = 2
+
+[model]
+d_model = 64
+n_layers = 2
+n_heads = 4
+n_kv_heads = 2
+d_ff = 128
+max_seq_len = 64
+dropout = 0.0
+attention_type = "gqa"
+positional_encoding = "rope"
+norm_type = "rmsnorm"
+activation = "swiglu"
+tie_word_embeddings = true
+
+[training]
+max_steps = 120
+batch_size = 4
+gradient_accumulation_steps = 1
+optimizer = "adamw"
+lr = 0.003
+weight_decay = 0.01
+grad_clip = 1.0
+scheduler = "cosine"
+warmup_steps = 5
+eval_every = 20
+eval_steps = 8
+gradient_checkpointing = false
+use_compile = false
+use_8bit_optimizer = false
+save_best_only = false
+z_loss_weight = 0.0
+
+[evaluation]
+prompts = ["Ada finds", "Ben carries a", "Lina shares"]
+max_new_tokens = 24
+temperature = 0.8
+top_p = 0.9
+
+[export]
+enabled = false
+model_name = "LLM-Lab small-model learning exercise"
+description = "Small synthetic-corpus exercise; not an instruction model or general language benchmark."
+license = "mit"

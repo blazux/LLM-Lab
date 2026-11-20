@@ -49,11 +49,18 @@ class SinusoidalPositional(nn.Module):
 
 
 class RoPE(nn.Module):
-    """Rotary Position Embedding"""
-    def __init__(self, d_k: int, max_seq_len: int):
+    """Rotary Position Embedding with configurable partial rotation.
+
+    fraction = share of rotation pairs that actually rotate (the rest are
+    position-free, GPT-NeoX / Qwen3-Next "partial RoPE" style). The default
+    0.5 reproduces the historical quarter-spectrum behavior of this codebase.
+    """
+    def __init__(self, d_k: int, max_seq_len: int, fraction: float = 0.5):
         super().__init__()
-        angular_freq = (1 / 10000) ** torch.linspace(0, 1, steps=d_k // 4, dtype=torch.float32)
-        angular_freq = torch.cat([angular_freq, angular_freq.new_zeros(d_k // 4)])
+        n_pairs = d_k // 2
+        n_active = min(n_pairs, max(1, round(n_pairs * fraction)))
+        angular_freq = (1 / 10000) ** torch.linspace(0, 1, steps=n_active, dtype=torch.float32)
+        angular_freq = torch.cat([angular_freq, angular_freq.new_zeros(n_pairs - n_active)])
         t = torch.arange(max_seq_len, dtype=torch.float32)
         theta = torch.einsum("i,j -> ij", t, angular_freq)
         self.register_buffer('cos', theta.cos(), persistent=False)
@@ -169,7 +176,13 @@ class MultiHeadAttention(nn.Module):
         # Position encoding (will be set by model)
         self.pos_encoding = None
 
-    def forward(self, x, past_key_values=None, start_pos=0):
+        # Qwen3-Next-style sigmoid output gate (query-dependent, elementwise)
+        if getattr(config, 'use_attention_gate', False):
+            self.attn_gate = nn.Linear(config.d_model, self.n_heads * self.d_k, bias=False)
+        else:
+            self.attn_gate = None
+
+    def forward(self, x, past_key_values=None, start_pos=0, doc_ids=None):
         batch_size, seq_len = x.size(0), x.size(1)
 
         q = self.q_proj(x).view(batch_size, seq_len, self.n_heads, self.d_k).transpose(1, 2)
@@ -185,8 +198,8 @@ class MultiHeadAttention(nn.Module):
             k = torch.cat([past_key_values[0], k], dim=2)
             v = torch.cat([past_key_values[1], v], dim=2)
             if self.sliding_window is not None and self.sliding_window > 0 and k.size(2) > self.sliding_window:
-                k = k[:, :, -self.sliding_window:, :]
-                v = v[:, :, -self.sliding_window:, :]
+                k = k[:, :, -(self.sliding_window + 1):, :]
+                v = v[:, :, -(self.sliding_window + 1):, :]
         new_kv = (k.detach(), v.detach())
         kv_len = k.size(2)
 
@@ -195,6 +208,7 @@ class MultiHeadAttention(nn.Module):
             _FLASH_ATTN_AVAILABLE
             and self.sliding_window is not None and self.sliding_window > 0
             and past_key_values is None
+            and doc_ids is None
             and x.is_cuda
             and q.dtype in (torch.float16, torch.bfloat16)
         )
@@ -208,6 +222,8 @@ class MultiHeadAttention(nn.Module):
                 fa_kwargs["alibi_slopes"] = alibi_slopes
             attn_output = flash_attn_func(q_fa, k_fa, v_fa, **fa_kwargs)
             attn_output = attn_output.reshape(batch_size, seq_len, self.d_model)
+            if self.attn_gate is not None:
+                attn_output = attn_output * torch.sigmoid(self.attn_gate(x))
             return self.w_o(attn_output), new_kv
 
         # SDPA fallback path
@@ -216,6 +232,21 @@ class MultiHeadAttention(nn.Module):
 
         if past_key_values is None and self.sliding_window is not None and self.sliding_window > 0:
             attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
+            is_causal = False
+
+        if doc_ids is not None and past_key_values is None:
+            doc_mask = _create_document_mask(doc_ids)
+            attn_mask = doc_mask if attn_mask is None else (attn_mask & doc_mask)
+            is_causal = False
+
+        # Chunked prefill with a cache: without a mask, tokens inside the new
+        # chunk could attend to LATER tokens of the same chunk
+        if past_key_values is not None and seq_len > 1:
+            past_len = kv_len - seq_len
+            q_pos = torch.arange(seq_len, device=x.device).unsqueeze(1) + past_len
+            k_pos = torch.arange(kv_len, device=x.device).unsqueeze(0)
+            chunk_mask = (k_pos <= q_pos).unsqueeze(0).unsqueeze(0)
+            attn_mask = chunk_mask if attn_mask is None else (attn_mask & chunk_mask)
             is_causal = False
 
         if self.pos_encoding is not None and isinstance(self.pos_encoding, ALiBi):
@@ -235,7 +266,28 @@ class MultiHeadAttention(nn.Module):
             q, k, v, attn_mask=attn_mask, is_causal=is_causal, dropout_p=self.dropout if self.training else 0.0
         )
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
+        if self.attn_gate is not None:
+            attn_output = attn_output * torch.sigmoid(self.attn_gate(x))
         return self.w_o(attn_output), new_kv
+
+
+def _create_document_mask(doc_ids: torch.Tensor) -> torch.Tensor:
+    """Create a causal, intra-document attention mask for packed sequences.
+
+    Tokens may only attend to earlier tokens of the SAME document — without
+    this, packing multiple documents into one sequence lets attention leak
+    across document boundaries (Llama 3 / SmolLM3 style masking).
+
+    Args:
+        doc_ids: (batch, seq_len) int tensor of per-token document indices
+
+    Returns:
+        mask: (batch, 1, seq_len, seq_len) bool tensor (True = allowed)
+    """
+    seq_len = doc_ids.size(1)
+    causal = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=doc_ids.device))
+    same_doc = doc_ids.unsqueeze(2) == doc_ids.unsqueeze(1)  # (B, T, T)
+    return (causal.unsqueeze(0) & same_doc).unsqueeze(1)
 
 
 def _create_sliding_window_mask(seq_len: int, sliding_window: int, device) -> torch.Tensor:
@@ -274,7 +326,13 @@ class MultiQueryAttention(nn.Module):
 
         self.pos_encoding = None
 
-    def forward(self, x, past_key_values=None, start_pos=0):
+        # Qwen3-Next-style sigmoid output gate (query-dependent, elementwise)
+        if getattr(config, 'use_attention_gate', False):
+            self.attn_gate = nn.Linear(config.d_model, self.n_heads * self.d_k, bias=False)
+        else:
+            self.attn_gate = None
+
+    def forward(self, x, past_key_values=None, start_pos=0, doc_ids=None):
         batch_size, seq_len = x.size(0), x.size(1)
 
         q = self.q_proj(x).view(batch_size, seq_len, self.n_heads, self.d_k).transpose(1, 2)
@@ -290,8 +348,8 @@ class MultiQueryAttention(nn.Module):
             k = torch.cat([past_key_values[0], k], dim=2)
             v = torch.cat([past_key_values[1], v], dim=2)
             if self.sliding_window is not None and self.sliding_window > 0 and k.size(2) > self.sliding_window:
-                k = k[:, :, -self.sliding_window:, :]
-                v = v[:, :, -self.sliding_window:, :]
+                k = k[:, :, -(self.sliding_window + 1):, :]
+                v = v[:, :, -(self.sliding_window + 1):, :]
         new_kv = (k.detach(), v.detach())
         kv_len = k.size(2)
 
@@ -300,6 +358,7 @@ class MultiQueryAttention(nn.Module):
             _FLASH_ATTN_AVAILABLE
             and self.sliding_window is not None and self.sliding_window > 0
             and past_key_values is None
+            and doc_ids is None
             and x.is_cuda
             and q.dtype in (torch.float16, torch.bfloat16)
         )
@@ -313,6 +372,8 @@ class MultiQueryAttention(nn.Module):
                 fa_kwargs["alibi_slopes"] = alibi_slopes
             attn_output = flash_attn_func(q_fa, k_fa, v_fa, **fa_kwargs)
             attn_output = attn_output.reshape(batch_size, seq_len, self.d_model)
+            if self.attn_gate is not None:
+                attn_output = attn_output * torch.sigmoid(self.attn_gate(x))
             return self.w_o(attn_output), new_kv
 
         # SDPA fallback: expand k/v to full heads
@@ -324,6 +385,21 @@ class MultiQueryAttention(nn.Module):
 
         if past_key_values is None and self.sliding_window is not None and self.sliding_window > 0:
             attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
+            is_causal = False
+
+        if doc_ids is not None and past_key_values is None:
+            doc_mask = _create_document_mask(doc_ids)
+            attn_mask = doc_mask if attn_mask is None else (attn_mask & doc_mask)
+            is_causal = False
+
+        # Chunked prefill with a cache: without a mask, tokens inside the new
+        # chunk could attend to LATER tokens of the same chunk
+        if past_key_values is not None and seq_len > 1:
+            past_len = kv_len - seq_len
+            q_pos = torch.arange(seq_len, device=x.device).unsqueeze(1) + past_len
+            k_pos = torch.arange(kv_len, device=x.device).unsqueeze(0)
+            chunk_mask = (k_pos <= q_pos).unsqueeze(0).unsqueeze(0)
+            attn_mask = chunk_mask if attn_mask is None else (attn_mask & chunk_mask)
             is_causal = False
 
         if self.pos_encoding is not None and isinstance(self.pos_encoding, ALiBi):
@@ -342,7 +418,60 @@ class MultiQueryAttention(nn.Module):
             q, k_expanded, v_expanded, attn_mask=attn_mask, is_causal=is_causal, dropout_p=self.dropout if self.training else 0.0
         )
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
+        if self.attn_gate is not None:
+            attn_output = attn_output * torch.sigmoid(self.attn_gate(x))
         return self.w_o(attn_output), new_kv
+
+
+class LightningIndexer(nn.Module):
+    """DSA-style lightning indexer (DeepSeek V3.2 / GLM-5).
+
+    A tiny scoring network deciding which past tokens each query attends to:
+        I(i, j) = sum_h w_h(i) * ReLU(q_idx_h(i) . k_idx(j))
+    Main attention then runs only over each query's top-k tokens. The indexer
+    is trained with a KL alignment loss against the (detached) true attention
+    distribution, returned as an auxiliary loss.
+    """
+
+    def __init__(self, d_model: int, n_heads: int = 4, d_index: int = 32):
+        super().__init__()
+        self.n_heads = n_heads
+        self.d_index = d_index
+        self.q_proj = nn.Linear(d_model, n_heads * d_index, bias=False)
+        self.k_proj = nn.Linear(d_model, d_index, bias=False)
+        self.w_proj = nn.Linear(d_model, n_heads, bias=False)
+
+    def scores(self, x):
+        """x: (B, T, d_model) -> index scores (B, T, T) (query, key)"""
+        B, T, _ = x.shape
+        q = self.q_proj(x).view(B, T, self.n_heads, self.d_index)
+        k = self.k_proj(x)  # (B, T, d_index)
+        w = self.w_proj(x)  # (B, T, n_heads)
+        # (B, H, T, T): relu(q . k) per indexer head, then weighted head sum
+        qk = torch.einsum('bthd,bsd->bhts', q, k)
+        return torch.einsum('bth,bhts->bts', w, F.relu(qk))
+
+
+def _topk_sparse_mask(index_scores: torch.Tensor, top_k: int,
+                      constraint: torch.Tensor) -> torch.Tensor:
+    """Bool mask (B, 1, T, T): key j is in query i's top-k among ALLOWED keys.
+
+    constraint: (B|1, 1, T, T) bool — causal ∧ sliding-window ∧ document mask.
+    Selecting from the constrained scores (not just causal) prevents the fatal
+    case where top-k picks only tokens another mask forbids, leaving a query
+    with zero attendable keys (SDPA: zero rows on CPU, NaN on CUDA). The
+    diagonal is always included so every query can at least attend to itself.
+    """
+    B, T, _ = index_scores.shape
+    c = constraint.squeeze(1)  # (B|1, T, T)
+    scores = index_scores.masked_fill(~c, float('-inf'))
+    k = min(top_k, T)
+    topk_idx = scores.topk(k, dim=-1).indices
+    mask = torch.zeros(B, T, T, dtype=torch.bool, device=index_scores.device)
+    mask.scatter_(-1, topk_idx, True)
+    mask = mask & c  # drop picks that were -inf placeholders in short rows
+    mask.diagonal(dim1=-2, dim2=-1).fill_(True)
+    return mask.unsqueeze(1)
 
 
 class GroupedQueryAttention(nn.Module):
@@ -372,7 +501,25 @@ class GroupedQueryAttention(nn.Module):
 
         self.pos_encoding = None
 
-    def forward(self, x, past_key_values=None, start_pos=0):
+        # Qwen3-Next-style sigmoid output gate (query-dependent, elementwise)
+        if getattr(config, 'use_attention_gate', False):
+            self.attn_gate = nn.Linear(config.d_model, self.n_heads * self.d_k, bias=False)
+        else:
+            self.attn_gate = None
+
+        # DSA-style sparse attention (indexer + top-k token selection)
+        if getattr(config, 'use_sparse_attention', False):
+            self.indexer = LightningIndexer(
+                config.d_model,
+                n_heads=getattr(config, 'sparse_indexer_heads', 4),
+                d_index=getattr(config, 'sparse_indexer_dim', 32),
+            )
+            self.sparse_top_k = getattr(config, 'sparse_top_k', 512)
+        else:
+            self.indexer = None
+        self.indexer_loss = None
+
+    def forward(self, x, past_key_values=None, start_pos=0, doc_ids=None):
         batch_size, seq_len = x.size(0), x.size(1)
 
         q = self.q_proj(x).view(batch_size, seq_len, self.n_heads, self.d_k)
@@ -397,8 +544,8 @@ class GroupedQueryAttention(nn.Module):
             k = torch.cat([past_key_values[0], k], dim=2)
             v = torch.cat([past_key_values[1], v], dim=2)
             if self.sliding_window is not None and self.sliding_window > 0 and k.size(2) > self.sliding_window:
-                k = k[:, :, -self.sliding_window:, :]
-                v = v[:, :, -self.sliding_window:, :]
+                k = k[:, :, -(self.sliding_window + 1):, :]
+                v = v[:, :, -(self.sliding_window + 1):, :]
         new_kv = (k.detach(), v.detach())
         kv_len = k.size(2)
 
@@ -407,6 +554,8 @@ class GroupedQueryAttention(nn.Module):
             _FLASH_ATTN_AVAILABLE
             and self.sliding_window is not None and self.sliding_window > 0
             and past_key_values is None
+            and doc_ids is None
+            and self.indexer is None
             and x.is_cuda
             and q.dtype in (torch.float16, torch.bfloat16)
         )
@@ -420,6 +569,8 @@ class GroupedQueryAttention(nn.Module):
                 fa_kwargs["alibi_slopes"] = alibi_slopes
             attn_output = flash_attn_func(q_fa, k_fa, v_fa, **fa_kwargs)
             attn_output = attn_output.reshape(batch_size, seq_len, self.d_model)
+            if self.attn_gate is not None:
+                attn_output = attn_output * torch.sigmoid(self.attn_gate(x))
             return self.w_o(attn_output), new_kv
 
         # SDPA fallback: expand k/v to full heads
@@ -432,6 +583,50 @@ class GroupedQueryAttention(nn.Module):
         if past_key_values is None and self.sliding_window is not None and self.sliding_window > 0:
             attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
             is_causal = False
+
+        if doc_ids is not None and past_key_values is None:
+            doc_mask = _create_document_mask(doc_ids)
+            attn_mask = doc_mask if attn_mask is None else (attn_mask & doc_mask)
+            is_causal = False
+
+        # Chunked prefill with a cache: without a mask, tokens inside the new
+        # chunk could attend to LATER tokens of the same chunk
+        if past_key_values is not None and seq_len > 1:
+            past_len = kv_len - seq_len
+            q_pos = torch.arange(seq_len, device=x.device).unsqueeze(1) + past_len
+            k_pos = torch.arange(kv_len, device=x.device).unsqueeze(0)
+            chunk_mask = (k_pos <= q_pos).unsqueeze(0).unsqueeze(0)
+            attn_mask = chunk_mask if attn_mask is None else (attn_mask & chunk_mask)
+            is_causal = False
+
+        # DSA-style sparse attention: restrict each query to its indexer top-k
+        # (decode with cache stays dense — a documented train/infer asymmetry:
+        # with T < top_k they are identical anyway)
+        self.indexer_loss = None
+        if self.indexer is not None and past_key_values is None:
+            index_scores = self.indexer.scores(x)
+            causal4 = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool,
+                                            device=x.device)).unsqueeze(0).unsqueeze(0)
+            constraint = causal4 if attn_mask is None else (attn_mask & causal4)
+            attn_mask = _topk_sparse_mask(index_scores, self.sparse_top_k, constraint)
+            is_causal = False
+
+            if self.training:
+                # Train the indexer: KL(true attention dist || indexer dist),
+                # true distribution detached (indexer follows the model) and
+                # computed under the SAME constraints the real attention sees
+                c = constraint.squeeze(1)  # (B|1, T, T)
+                with torch.no_grad():
+                    true_scores = (q @ k_expanded.transpose(-2, -1)) * (self.d_k ** -0.5)
+                    true_scores = true_scores.masked_fill(~constraint, float('-inf'))
+                    true_probs = F.softmax(true_scores.float(), dim=-1).mean(dim=1)  # (B, T, T)
+                idx_logp = F.log_softmax(
+                    index_scores.float().masked_fill(~c, float('-inf')), dim=-1)
+                # Manual KL over valid entries only: masked positions have
+                # true_prob 0 and log-prob -inf, and 0 * -inf would be NaN
+                idx_logp = idx_logp.masked_fill(~c, 0.0)
+                true_logp = torch.log(true_probs.clamp_min(1e-9)).masked_fill(~c, 0.0)
+                self.indexer_loss = (true_probs * (true_logp - idx_logp)).sum(-1).mean()
 
         if self.pos_encoding is not None and isinstance(self.pos_encoding, ALiBi):
             if past_key_values is not None:
@@ -452,6 +647,8 @@ class GroupedQueryAttention(nn.Module):
             dropout_p=self.dropout if self.training else 0.0
         )
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
+        if self.attn_gate is not None:
+            attn_output = attn_output * torch.sigmoid(self.attn_gate(x))
         return self.w_o(attn_output), new_kv
 
 
@@ -521,7 +718,13 @@ class MultiHeadLatentAttention(nn.Module):
 
         self.pos_encoding = None
 
-    def forward(self, x, past_key_values=None, start_pos=0):
+        # Qwen3-Next-style sigmoid output gate (query-dependent, elementwise)
+        if getattr(config, 'use_attention_gate', False):
+            self.attn_gate = nn.Linear(config.d_model, self.n_heads * self.d_k, bias=False)
+        else:
+            self.attn_gate = None
+
+    def forward(self, x, past_key_values=None, start_pos=0, doc_ids=None):
         batch_size, seq_len = x.size(0), x.size(1)
 
         # Q: Standard projection
@@ -576,8 +779,8 @@ class MultiHeadLatentAttention(nn.Module):
             k = torch.cat([past_key_values[0], k], dim=2)
             v = torch.cat([past_key_values[1], v], dim=2)
             if self.sliding_window is not None and self.sliding_window > 0 and k.size(2) > self.sliding_window:
-                k = k[:, :, -self.sliding_window:, :]
-                v = v[:, :, -self.sliding_window:, :]
+                k = k[:, :, -(self.sliding_window + 1):, :]
+                v = v[:, :, -(self.sliding_window + 1):, :]
         new_kv = (k.detach(), v.detach())
         kv_len = k.size(2)
 
@@ -586,6 +789,7 @@ class MultiHeadLatentAttention(nn.Module):
             _FLASH_ATTN_AVAILABLE
             and self.sliding_window is not None and self.sliding_window > 0
             and past_key_values is None
+            and doc_ids is None
             and x.is_cuda
             and q.dtype in (torch.float16, torch.bfloat16)
         )
@@ -599,6 +803,8 @@ class MultiHeadLatentAttention(nn.Module):
                 fa_kwargs["alibi_slopes"] = alibi_slopes
             attn_output = flash_attn_func(q_fa, k_fa, v_fa, **fa_kwargs)
             attn_output = attn_output.reshape(batch_size, seq_len, self.n_heads * self.d_k)
+            if self.attn_gate is not None:
+                attn_output = attn_output * torch.sigmoid(self.attn_gate(x))
             return self.w_o(attn_output), new_kv
 
         # SDPA fallback
@@ -607,6 +813,21 @@ class MultiHeadLatentAttention(nn.Module):
 
         if past_key_values is None and self.sliding_window is not None and self.sliding_window > 0:
             attn_mask = _create_sliding_window_mask(seq_len, self.sliding_window, x.device)
+            is_causal = False
+
+        if doc_ids is not None and past_key_values is None:
+            doc_mask = _create_document_mask(doc_ids)
+            attn_mask = doc_mask if attn_mask is None else (attn_mask & doc_mask)
+            is_causal = False
+
+        # Chunked prefill with a cache: without a mask, tokens inside the new
+        # chunk could attend to LATER tokens of the same chunk
+        if past_key_values is not None and seq_len > 1:
+            past_len = kv_len - seq_len
+            q_pos = torch.arange(seq_len, device=x.device).unsqueeze(1) + past_len
+            k_pos = torch.arange(kv_len, device=x.device).unsqueeze(0)
+            chunk_mask = (k_pos <= q_pos).unsqueeze(0).unsqueeze(0)
+            attn_mask = chunk_mask if attn_mask is None else (attn_mask & chunk_mask)
             is_causal = False
 
         if self.pos_encoding is not None and isinstance(self.pos_encoding, ALiBi):
@@ -628,6 +849,8 @@ class MultiHeadLatentAttention(nn.Module):
             dropout_p=self.dropout if self.training else 0.0
         )
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.n_heads * self.d_k)
+        if self.attn_gate is not None:
+            attn_output = attn_output * torch.sigmoid(self.attn_gate(x))
         return self.w_o(attn_output), new_kv
 
 
@@ -692,6 +915,9 @@ class StandardFFN(nn.Module):
 
         if activation == "relu":
             self.activation = F.relu
+        elif activation == "relu2":
+            # Squared ReLU (Primer / modded-nanogpt): strong small-scale baseline
+            self.activation = lambda x: F.relu(x).square()
         elif activation == "gelu":
             self.activation = F.gelu
         elif activation == "silu":
@@ -731,29 +957,46 @@ class MoEFFN(nn.Module):
     """
     def __init__(self, config):
         super().__init__()
-        from config import ModelConfig
 
         self.d_model = config.d_model
         self.num_experts = config.num_experts
         self.num_experts_per_token = config.num_experts_per_token
         self.load_balancing_loss_weight = config.load_balancing_loss_weight
         self.router_z_loss_weight = config.router_z_loss_weight
+        self.router_type = getattr(config, 'moe_router_type', 'softmax')
+        self.aux_free_bias = getattr(config, 'moe_aux_free_bias', False)
+        self.bias_update_rate = getattr(config, 'moe_bias_update_rate', 0.001)
 
         # Router: learns which experts to use for each token
         self.router = nn.Linear(self.d_model, self.num_experts, bias=False)
 
-        # Experts: create num_experts copies of the same FFN type
-        self.experts = nn.ModuleList()
-        for _ in range(self.num_experts):
+        # DeepSeek-V3 aux-loss-free balancing: a per-expert bias used only for
+        # top-k SELECTION (never for output weighting), nudged toward even
+        # expert load once per optimizer step (apply_aux_free_bias_updates in
+        # the trainer). Forward only ACCUMULATES counts — mutating the bias in
+        # forward would change routing between the checkpointing forward and
+        # its backward recomputation and crash. Persistent so it survives export.
+        if self.aux_free_bias:
+            self.register_buffer('expert_bias', torch.zeros(self.num_experts))
+            self.register_buffer('expert_load_acc', torch.zeros(self.num_experts), persistent=False)
+        else:
+            self.expert_bias = None
+            self.expert_load_acc = None
+
+        def make_expert():
             if config.activation == 'swiglu':
-                expert = SwiGLU(config.d_model, config.d_ff, config.dropout)
+                return SwiGLU(config.d_model, config.d_ff, config.dropout)
             elif config.activation == 'geglu':
-                expert = GeGLU(config.d_model, config.d_ff, config.dropout)
+                return GeGLU(config.d_model, config.d_ff, config.dropout)
             elif config.activation == 'reglu':
-                expert = ReGLU(config.d_model, config.d_ff, config.dropout)
-            else:
-                expert = StandardFFN(config.d_model, config.d_ff, config.activation, config.dropout)
-            self.experts.append(expert)
+                return ReGLU(config.d_model, config.d_ff, config.dropout)
+            return StandardFFN(config.d_model, config.d_ff, config.activation, config.dropout)
+
+        # Experts: create num_experts copies of the same FFN type
+        self.experts = nn.ModuleList([make_expert() for _ in range(self.num_experts)])
+
+        # DeepSeek-MoE style always-active shared expert
+        self.shared_expert = make_expert() if getattr(config, 'moe_shared_expert', False) else None
 
     def forward(self, x):
         """
@@ -773,15 +1016,29 @@ class MoEFFN(nn.Module):
 
         # Router computes expert scores
         router_logits = self.router(x_flat)  # (batch * seq_len, num_experts)
-        router_probs = F.softmax(router_logits, dim=-1)  # (batch * seq_len, num_experts)
+        if self.router_type == 'sigmoid':
+            # DeepSeek-V3: per-expert sigmoid affinities
+            router_probs = torch.sigmoid(router_logits)
+        else:
+            router_probs = F.softmax(router_logits, dim=-1)
 
-        # Top-K selection: pick top num_experts_per_token experts for each token
-        topk_probs, topk_indices = torch.topk(router_probs, k=self.num_experts_per_token, dim=-1)
-        # topk_probs: (batch * seq_len, num_experts_per_token)
-        # topk_indices: (batch * seq_len, num_experts_per_token)
+        # Top-K selection — the aux-free bias shifts SELECTION only, never weights
+        selection_scores = router_probs
+        if self.expert_bias is not None:
+            selection_scores = router_probs + self.expert_bias
+        _, topk_indices = torch.topk(selection_scores, k=self.num_experts_per_token, dim=-1)
+        topk_probs = router_probs.gather(-1, topk_indices)
 
         # Normalize topk probabilities (so they sum to 1)
-        topk_probs = topk_probs / topk_probs.sum(dim=-1, keepdim=True)
+        topk_probs = topk_probs / (topk_probs.sum(dim=-1, keepdim=True) + 1e-9)
+
+        # Aux-free balancing: only ACCUMULATE the load statistics here
+        # (checkpoint recomputation may run this twice — a uniform x2 on the
+        # counts does not change the sign-based update applied per step)
+        if self.expert_load_acc is not None and self.training:
+            with torch.no_grad():
+                counts = torch.bincount(topk_indices.flatten(), minlength=self.num_experts)
+                self.expert_load_acc += counts.to(self.expert_load_acc.dtype)
 
         # Compute expert outputs
         # Strategy: For each token, compute outputs from selected experts and combine
@@ -812,13 +1069,41 @@ class MoEFFN(nn.Module):
             # Add weighted expert output to final output
             output[token_expert_mask] += expert_weights.unsqueeze(-1) * expert_out
 
+        # Always-active shared expert (added on top of routed experts)
+        if self.shared_expert is not None:
+            output = output + self.shared_expert(x_flat)
+
         # Reshape back to (batch, seq_len, d_model)
         output = output.view(batch_size, seq_len, d_model)
 
-        # Compute auxiliary losses
-        aux_loss = self._compute_aux_loss(router_logits, router_probs, topk_indices)
+        # Auxiliary losses (softmax router only — aux-free bias replaces them)
+        if self.aux_free_bias:
+            aux_loss = None
+        else:
+            aux_loss = self._compute_aux_loss(router_logits, router_probs, topk_indices)
 
         return output, aux_loss
+
+    def apply_bias_update(self):
+        """Apply one aux-loss-free balancing step (call once per optimizer step)."""
+        if self.expert_bias is None:
+            return
+        with torch.no_grad():
+            counts = self.expert_load_acc.float()
+            if counts.sum() > 0:
+                update = self.bias_update_rate * torch.sign(counts.mean() - counts)
+                # compute in fp32 to survive a bf16 model cast
+                self.expert_bias.copy_((self.expert_bias.float() + update).to(self.expert_bias.dtype))
+            self.expert_load_acc.zero_()
+
+    def _apply(self, fn, recurse=True):
+        # Keep the routing bias in fp32 even when the model is cast to bf16 —
+        # bf16 quantization would swallow the tiny per-step updates
+        out = super()._apply(fn, recurse)
+        if self.expert_bias is not None and self.expert_bias.dtype != torch.float32:
+            self.expert_bias.data = self.expert_bias.data.float()
+            self.expert_load_acc.data = self.expert_load_acc.data.float()
+        return out
 
     def _compute_aux_loss(self, router_logits, router_probs, topk_indices):
         """
@@ -868,266 +1153,6 @@ class MoEFFN(nn.Module):
 
 
 # ============================================================================
-# MAMBA2 SSM BLOCK
-# ============================================================================
-
-class Mamba2(nn.Module):
-    """
-    Custom Mamba2 State Space Model implementation in pure PyTorch
-
-    This is a self-contained implementation that doesn't require the mamba-ssm package.
-    It uses standard PyTorch operations and runs on GPU efficiently.
-
-    Architecture:
-    - Input projection with expansion
-    - 1D causal convolution for local context
-    - Selective SSM (State Space Model) with learned dynamics
-    - Gated activation (SiLU)
-    - Output projection
-
-    Reference: https://arxiv.org/abs/2405.21060
-    """
-    def __init__(
-        self,
-        d_model: int,
-        d_state: int = 16,
-        d_conv: int = 4,
-        expand: int = 2,
-        headdim: int = 64,
-        ngroups: int = 1,
-        chunk_size: int = 256,
-        dt_rank: int = None,
-        dt_min: float = 0.001,
-        dt_max: float = 0.1,
-    ):
-        super().__init__()
-        self.d_model = d_model
-        self.d_state = d_state
-        self.d_conv = d_conv
-        self.expand = expand
-        self.d_inner = int(self.expand * self.d_model)
-        self.headdim = headdim
-        self.ngroups = ngroups
-
-        # Compute dt_rank (rank of delta projection)
-        if dt_rank is None:
-            self.dt_rank = math.ceil(self.d_model / 16)
-        else:
-            self.dt_rank = dt_rank
-
-        # Input projection: d_model -> d_inner * 2 (for gating)
-        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=False)
-
-        # Convolutional layer for local dependencies
-        self.conv1d = nn.Conv1d(
-            in_channels=self.d_inner,
-            out_channels=self.d_inner,
-            kernel_size=d_conv,
-            groups=self.d_inner,  # Depthwise convolution
-            padding=d_conv - 1,  # Causal padding
-            bias=True
-        )
-
-        # SSM parameters
-        # A: State transition matrix (fixed, initialized with special properties)
-        A = torch.randn(self.d_inner, self.d_state)
-        self.A_log = nn.Parameter(torch.log(A))  # Log-space for numerical stability
-
-        # D: Skip connection parameter
-        self.D = nn.Parameter(torch.ones(self.d_inner))
-
-        # Time-step projection (delta)
-        self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True)
-
-        # Initialize dt_proj with special initialization for stability
-        dt_init_std = self.dt_rank ** -0.5
-        nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
-
-        # Initialize dt bias to produce values between dt_min and dt_max
-        dt = torch.exp(
-            torch.rand(self.d_inner) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min)
-        )
-        inv_dt = dt + torch.log(-torch.expm1(-dt))
-        with torch.no_grad():
-            self.dt_proj.bias.copy_(inv_dt)
-
-        # X projection to dt_rank
-        self.x_proj = nn.Linear(self.d_inner, self.dt_rank, bias=False)
-
-        # B and C projections (input-dependent SSM parameters)
-        self.B_proj = nn.Linear(self.d_inner, self.d_state, bias=False)
-        self.C_proj = nn.Linear(self.d_inner, self.d_state, bias=False)
-
-        # Output projection
-        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=False)
-
-    def forward(self, x):
-        """
-        Forward pass
-
-        Args:
-            x: (batch, seq_len, d_model)
-
-        Returns:
-            output: (batch, seq_len, d_model)
-        """
-        batch_size, seq_len, _ = x.shape
-
-        # Input projection with gating
-        xz = self.in_proj(x)  # (batch, seq_len, d_inner * 2)
-        x_input, z = xz.chunk(2, dim=-1)  # Each is (batch, seq_len, d_inner)
-
-        # 1D Convolution (causal)
-        x_conv = self.conv1d(x_input.transpose(1, 2))[..., :seq_len].transpose(1, 2)
-        x_conv = F.silu(x_conv)  # Activation after conv
-
-        # Selective SSM
-        # Compute time-step delta
-        x_dt = self.x_proj(x_conv)  # (batch, seq_len, dt_rank)
-        dt = self.dt_proj(x_dt)  # (batch, seq_len, d_inner)
-        dt = F.softplus(dt)  # Ensure positive time-steps
-
-        # Compute input-dependent B and C
-        B = self.B_proj(x_conv)  # (batch, seq_len, d_state)
-        C = self.C_proj(x_conv)  # (batch, seq_len, d_state)
-
-        # Get A from log-space
-        A = -torch.exp(self.A_log)  # (d_inner, d_state)
-
-        # Selective scan (sequential implementation)
-        y = self._selective_scan(x_conv, dt, A, B, C)
-
-        # Skip connection (like residual)
-        y = y + self.D.unsqueeze(0).unsqueeze(0) * x_conv
-
-        # Gating with z
-        y = y * F.silu(z)
-
-        # Output projection
-        output = self.out_proj(y)
-
-        return output
-
-    def _selective_scan(self, x, dt, A, B, C):
-        """
-        Selective scan implementation (sequential for correctness)
-
-        WARNING: This is a memory-intensive fallback implementation!
-        For production use, install mamba-ssm for optimized CUDA kernels:
-        pip install mamba-ssm>=2.0.0 causal-conv1d>=1.2.0
-
-        Args:
-            x: (batch, seq_len, d_inner) - input sequence
-            dt: (batch, seq_len, d_inner) - time-step deltas
-            A: (d_inner, d_state) - state transition matrix
-            B: (batch, seq_len, d_state) - input matrix
-            C: (batch, seq_len, d_state) - output matrix
-
-        Returns:
-            y: (batch, seq_len, d_inner) - output sequence
-        """
-        batch_size, seq_len, d_inner = x.shape
-        d_state = A.shape[1]
-
-        # Initialize state
-        h = torch.zeros(batch_size, d_inner, d_state, device=x.device, dtype=x.dtype)
-
-        # Output buffer
-        y = []
-
-        # Sequential scan (not optimized but correct)
-        # Process in chunks to reduce memory (less gradient tracking)
-        A_unsqueezed = A.unsqueeze(0)  # Pre-compute (1, d_inner, d_state)
-
-        for t in range(seq_len):
-            # Discretize A using dt: A_discrete = exp(dt * A)
-            # For numerical stability, use A_discrete ≈ (1 + dt * A)
-            dt_t = dt[:, t, :].unsqueeze(-1)  # (batch, d_inner, 1)
-
-            # Discretized state transition: h = A_discrete * h + B * x
-            # Simplified: h = h + dt * (A * h + B * x)
-            B_t = B[:, t, :].unsqueeze(1)  # (batch, 1, d_state)
-            x_t = x[:, t, :].unsqueeze(-1)  # (batch, d_inner, 1)
-
-            # State update: h_new = h * exp(dt * A) + B * x * dt
-            # Approximation: h_new ≈ h + dt * A * h + dt * B * x
-            dh_state = dt_t * (A_unsqueezed * h)  # (batch, d_inner, d_state)
-            dh_input = dt_t * (B_t * x_t)  # (batch, d_inner, d_state)
-            h = h + dh_state + dh_input
-
-            # Output: y = C * h
-            C_t = C[:, t, :].unsqueeze(1)  # (batch, 1, d_state)
-            y_t = (C_t * h).sum(dim=-1)  # (batch, d_inner)
-
-            # Detach and reattach to reduce gradient graph depth
-            # This trades off gradient accuracy for memory
-            if t > 0 and t % 64 == 0 and self.training:
-                # Checkpoint state every 64 steps to limit gradient graph
-                h = h.detach()
-                h.requires_grad_(True)
-
-            y.append(y_t)
-
-        return torch.stack(y, dim=1)
-
-
-class Mamba2Block(nn.Module):
-    """
-    Mamba2 State Space Model block with normalization and residual connection
-
-    Uses official mamba-ssm library for optimized CUDA kernels.
-    Much more memory efficient than custom PyTorch implementation.
-    """
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-
-        # Normalization before Mamba2 (pre-norm architecture)
-        NormClass = NORM_TYPES[config.norm_type]
-        self.norm = NormClass(config.d_model, eps=config.norm_eps)
-
-        # Try to use official mamba-ssm implementation (optimized CUDA kernels)
-        # Fall back to custom PyTorch implementation if not available
-        try:
-            from mamba_ssm import Mamba2 as Mamba2Official
-            self.mamba = Mamba2Official(
-                d_model=config.d_model,
-                d_state=config.state_size,
-                d_conv=config.conv_kernel_size,
-                expand=config.expand_factor,
-                headdim=config.headdim,
-                ngroups=config.ngroups,
-                chunk_size=config.chunk_size,
-            )
-            print("Using official mamba-ssm optimized kernels")
-        except ImportError:
-            print("Warning: mamba-ssm not found. Using PyTorch fallback implementation.")
-            print("For better performance, install: pip install mamba-ssm>=2.0.0 causal-conv1d>=1.2.0")
-            self.mamba = Mamba2(
-                d_model=config.d_model,
-                d_state=config.state_size,
-                d_conv=config.conv_kernel_size,
-                expand=config.expand_factor,
-                headdim=config.headdim,
-                ngroups=config.ngroups,
-                chunk_size=config.chunk_size,
-            )
-
-    def forward(self, x):
-        """
-        Forward pass with residual connection
-
-        Args:
-            x: (batch, seq_len, d_model)
-
-        Returns:
-            x: (batch, seq_len, d_model)
-        """
-        # Pre-norm with residual connection
-        return x + self.mamba(self.norm(x))
-
-
-# ============================================================================
 # REGISTRIES
 # ============================================================================
 
@@ -1153,6 +1178,7 @@ NORM_TYPES = {
 
 ACTIVATION_TYPES = {
     'relu': 'relu',
+    'relu2': 'relu2',
     'gelu': 'gelu',
     'silu': 'silu',
     'leaky_relu': 'leaky_relu',

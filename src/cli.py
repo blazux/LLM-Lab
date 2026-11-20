@@ -5,6 +5,10 @@ import sys
 # Add src directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+if __name__ == '__main__' and len(sys.argv) > 1:
+    from experiments.cli import main as experiment_main
+    raise SystemExit(experiment_main())
+
 from config import ModelConfig, TrainingConfig, RLHFConfig, SFTConfig
 from training import train_model, train_rlhf, train_sft
 from inference import interactive_inference
@@ -139,21 +143,6 @@ def configure_model():
 
     config = ModelConfig()
 
-    # Architecture selection
-    print_subsection("Architecture Selection", "🏛️")
-    print(f"\n  {Colors.CYAN}Available architectures:{Colors.RESET}")
-    print(f"    {Colors.BOLD}transformer{Colors.RESET} - Traditional attention-based model (O(N²) complexity)")
-    print(f"    {Colors.BOLD}mamba2{Colors.RESET}     - State-space model (O(N) complexity, longer context)")
-    print()
-    config.model_architecture = get_input(
-        "Model architecture",
-        default=config.model_architecture
-    )
-
-    if config.model_architecture not in ["transformer", "mamba2"]:
-        print_error(f"Invalid architecture: {config.model_architecture}")
-        print(f"  {Colors.DIM}Supported: transformer, mamba2{Colors.RESET}")
-        return
 
     # Tokenizer
     print_subsection("Tokenizer Configuration", "📖")
@@ -186,194 +175,132 @@ def configure_model():
     print(f"  {Colors.DIM}→ HF config: layer_norm_epsilon or rms_norm_eps{Colors.RESET}")
     config.norm_eps = get_input("Normalization epsilon", default=config.norm_eps, type_fn=float)
 
-    if config.model_architecture == "transformer":
-        # Transformer-specific configuration
-        print_subsection("Transformer Architecture", "🔀")
+    # Transformer-specific configuration
+    print_subsection("Transformer Architecture", "🔀")
 
-        print(f"\n  {Colors.DIM}Positional Encoding options: {Colors.BOLD}{', '.join(POSITIONAL_ENCODINGS.keys())}{Colors.RESET}")
-        print(f"  {Colors.DIM}→ HF config: position_embedding_type{Colors.RESET}")
-        config.positional_encoding = get_input(
-            "Positional encoding",
-            default=config.positional_encoding
+    print(f"\n  {Colors.DIM}Positional Encoding options: {Colors.BOLD}{', '.join(POSITIONAL_ENCODINGS.keys())}{Colors.RESET}")
+    print(f"  {Colors.DIM}→ HF config: position_embedding_type{Colors.RESET}")
+    config.positional_encoding = get_input(
+        "Positional encoding",
+        default=config.positional_encoding
+    )
+
+    print(f"\n  {Colors.DIM}Attention type options: {Colors.BOLD}{', '.join(ATTENTION_TYPES.keys())}{Colors.RESET}")
+    config.attention_type = get_input(
+        "Attention type",
+        default=config.attention_type
+    )
+
+    print(f"  {Colors.DIM}→ HF config: num_attention_heads{Colors.RESET}")
+    config.n_heads = get_input("Number of attention heads", default=config.n_heads, type_fn=int)
+
+    if config.attention_type == "gqa":
+        print(f"  {Colors.DIM}→ HF config: num_key_value_heads{Colors.RESET}")
+        config.n_kv_heads = get_input("Number of KV heads (for GQA)", default=config.n_kv_heads, type_fn=int)
+
+    print(f"\n  {Colors.DIM}Activation options: {Colors.BOLD}{', '.join(ACTIVATION_TYPES.keys())}{Colors.RESET}")
+    print(f"  {Colors.DIM}→ HF config: hidden_act{Colors.RESET}")
+    config.activation = get_input(
+        "Feed-forward activation",
+        default=config.activation
+    )
+
+    print(f"  {Colors.DIM}→ HF config: intermediate_size{Colors.RESET}")
+    config.d_ff = get_input("Feed-forward hidden size (d_ff)", default=config.d_ff, type_fn=int)
+
+    # Sliding window attention (optional)
+    print(f"\n  {Colors.DIM}Sliding window attention limits each token's attention to nearby tokens{Colors.RESET}")
+    print(f"  {Colors.DIM}Default (None) = full attention. Example: 2048 for local attention{Colors.RESET}")
+    print(f"  {Colors.DIM}→ HF config: sliding_window{Colors.RESET}")
+    sw_input = get_input(
+        "Sliding window size (or 'none' for full attention)",
+        default="none" if config.sliding_window is None else str(config.sliding_window)
+    )
+    if sw_input.lower() in ['none', 'null', '']:
+        config.sliding_window = None
+    else:
+        config.sliding_window = int(sw_input)
+
+    # Attention bias (optional)
+    print(f"\n  {Colors.DIM}→ HF config: attention_bias (typically False for modern LLMs){Colors.RESET}")
+    bias_input = get_input(
+        "Use bias in attention projections? (y/n)",
+        default="n" if not config.attention_bias else "y"
+    )
+    config.attention_bias = bias_input.lower() in ['y', 'yes', 'true']
+
+    # Mixture of Experts (optional)
+    print_subsection("Mixture of Experts (Optional)", "🎯")
+
+    print(f"\n  {Colors.CYAN}ℹ{Colors.RESET}  MoE replaces standard FFN with multiple expert FFNs + router")
+    print(f"     {Colors.DIM}Each token is routed to top-K experts based on learned routing{Colors.RESET}")
+    print(f"     {Colors.DIM}Increases model capacity while keeping inference cost similar{Colors.RESET}")
+    print(f"     {Colors.DIM}Used in: Mixtral-8x7B, DeepSeek-V2, Switch Transformer{Colors.RESET}")
+    print()
+
+    moe_input = get_input(
+        "Enable MoE (Mixture of Experts)? (y/n)",
+        default="n" if not config.use_moe else "y"
+    )
+    config.use_moe = moe_input.lower() in ['y', 'yes', 'true']
+
+    if config.use_moe:
+        print(f"\n  {Colors.DIM}Number of expert FFNs per layer (typical: 8 for Mixtral, 64 for DeepSeek){Colors.RESET}")
+        print(f"  {Colors.DIM}→ HF config: num_experts{Colors.RESET}")
+        config.num_experts = get_input(
+            "Number of experts",
+            default=config.num_experts if config.num_experts else 8,
+            type_fn=int
         )
 
-        print(f"\n  {Colors.DIM}Attention type options: {Colors.BOLD}{', '.join(ATTENTION_TYPES.keys())}{Colors.RESET}")
-        config.attention_type = get_input(
-            "Attention type",
-            default=config.attention_type
+        print(f"\n  {Colors.DIM}How many experts process each token (typical: 2){Colors.RESET}")
+        print(f"  {Colors.DIM}→ HF config: num_experts_per_token{Colors.RESET}")
+        config.num_experts_per_token = get_input(
+            "Experts per token (top-K)",
+            default=config.num_experts_per_token if config.num_experts_per_token else 2,
+            type_fn=int
         )
 
-        print(f"  {Colors.DIM}→ HF config: num_attention_heads{Colors.RESET}")
-        config.n_heads = get_input("Number of attention heads", default=config.n_heads, type_fn=int)
-
-        if config.attention_type == "gqa":
-            print(f"  {Colors.DIM}→ HF config: num_key_value_heads{Colors.RESET}")
-            config.n_kv_heads = get_input("Number of KV heads (for GQA)", default=config.n_kv_heads, type_fn=int)
-
-        print(f"\n  {Colors.DIM}Activation options: {Colors.BOLD}{', '.join(ACTIVATION_TYPES.keys())}{Colors.RESET}")
-        print(f"  {Colors.DIM}→ HF config: hidden_act{Colors.RESET}")
-        config.activation = get_input(
-            "Feed-forward activation",
-            default=config.activation
+        print(f"\n  {Colors.DIM}Load balancing loss encourages even expert utilization{Colors.RESET}")
+        print(f"  {Colors.DIM}→ HF config: load_balancing_loss_weight{Colors.RESET}")
+        config.load_balancing_loss_weight = get_input(
+            "Load balancing loss weight",
+            default=config.load_balancing_loss_weight,
+            type_fn=float
         )
 
-        print(f"  {Colors.DIM}→ HF config: intermediate_size{Colors.RESET}")
-        config.d_ff = get_input("Feed-forward hidden size (d_ff)", default=config.d_ff, type_fn=int)
-
-        # Sliding window attention (optional)
-        print(f"\n  {Colors.DIM}Sliding window attention limits each token's attention to nearby tokens{Colors.RESET}")
-        print(f"  {Colors.DIM}Default (None) = full attention. Example: 2048 for local attention{Colors.RESET}")
-        print(f"  {Colors.DIM}→ HF config: sliding_window{Colors.RESET}")
-        sw_input = get_input(
-            "Sliding window size (or 'none' for full attention)",
-            default="none" if config.sliding_window is None else str(config.sliding_window)
+        print(f"\n  {Colors.DIM}Router z-loss prevents overconfident routing (optional){Colors.RESET}")
+        print(f"  {Colors.DIM}→ HF config: router_z_loss_weight{Colors.RESET}")
+        config.router_z_loss_weight = get_input(
+            "Router z-loss weight",
+            default=config.router_z_loss_weight,
+            type_fn=float
         )
-        if sw_input.lower() in ['none', 'null', '']:
-            config.sliding_window = None
+
+        print(f"\n  {Colors.DIM}Optionally specify which layers use MoE (e.g., '0,2,4,6' or 'all'){Colors.RESET}")
+        print(f"  {Colors.DIM}Default: all layers use MoE{Colors.RESET}")
+        print(f"  {Colors.DIM}→ HF config: moe_layers{Colors.RESET}")
+        moe_layers_input = get_input(
+            "MoE layers (comma-separated indices or 'all')",
+            default="all"
+        )
+        if moe_layers_input.lower() in ['all', 'none', '']:
+            config.moe_layers = None  # All layers use MoE
         else:
-            config.sliding_window = int(sw_input)
+            # Parse comma-separated layer indices
+            config.moe_layers = [int(x.strip()) for x in moe_layers_input.split(',')]
 
-        # Attention bias (optional)
-        print(f"\n  {Colors.DIM}→ HF config: attention_bias (typically False for modern LLMs){Colors.RESET}")
-        bias_input = get_input(
-            "Use bias in attention projections? (y/n)",
-            default="n" if not config.attention_bias else "y"
-        )
-        config.attention_bias = bias_input.lower() in ['y', 'yes', 'true']
-
-        # Mixture of Experts (optional)
-        print_subsection("Mixture of Experts (Optional)", "🎯")
-
-        print(f"\n  {Colors.CYAN}ℹ{Colors.RESET}  MoE replaces standard FFN with multiple expert FFNs + router")
-        print(f"     {Colors.DIM}Each token is routed to top-K experts based on learned routing{Colors.RESET}")
-        print(f"     {Colors.DIM}Increases model capacity while keeping inference cost similar{Colors.RESET}")
-        print(f"     {Colors.DIM}Used in: Mixtral-8x7B, DeepSeek-V2, Switch Transformer{Colors.RESET}")
-        print()
-
-        moe_input = get_input(
-            "Enable MoE (Mixture of Experts)? (y/n)",
-            default="n" if not config.use_moe else "y"
-        )
-        config.use_moe = moe_input.lower() in ['y', 'yes', 'true']
-
-        if config.use_moe:
-            print(f"\n  {Colors.DIM}Number of expert FFNs per layer (typical: 8 for Mixtral, 64 for DeepSeek){Colors.RESET}")
-            print(f"  {Colors.DIM}→ HF config: num_experts{Colors.RESET}")
-            config.num_experts = get_input(
-                "Number of experts",
-                default=config.num_experts if config.num_experts else 8,
-                type_fn=int
-            )
-
-            print(f"\n  {Colors.DIM}How many experts process each token (typical: 2){Colors.RESET}")
-            print(f"  {Colors.DIM}→ HF config: num_experts_per_token{Colors.RESET}")
-            config.num_experts_per_token = get_input(
-                "Experts per token (top-K)",
-                default=config.num_experts_per_token if config.num_experts_per_token else 2,
-                type_fn=int
-            )
-
-            print(f"\n  {Colors.DIM}Load balancing loss encourages even expert utilization{Colors.RESET}")
-            print(f"  {Colors.DIM}→ HF config: load_balancing_loss_weight{Colors.RESET}")
-            config.load_balancing_loss_weight = get_input(
-                "Load balancing loss weight",
-                default=config.load_balancing_loss_weight,
-                type_fn=float
-            )
-
-            print(f"\n  {Colors.DIM}Router z-loss prevents overconfident routing (optional){Colors.RESET}")
-            print(f"  {Colors.DIM}→ HF config: router_z_loss_weight{Colors.RESET}")
-            config.router_z_loss_weight = get_input(
-                "Router z-loss weight",
-                default=config.router_z_loss_weight,
-                type_fn=float
-            )
-
-            print(f"\n  {Colors.DIM}Optionally specify which layers use MoE (e.g., '0,2,4,6' or 'all'){Colors.RESET}")
-            print(f"  {Colors.DIM}Default: all layers use MoE{Colors.RESET}")
-            print(f"  {Colors.DIM}→ HF config: moe_layers{Colors.RESET}")
-            moe_layers_input = get_input(
-                "MoE layers (comma-separated indices or 'all')",
-                default="all"
-            )
-            if moe_layers_input.lower() in ['all', 'none', '']:
-                config.moe_layers = None  # All layers use MoE
-            else:
-                # Parse comma-separated layer indices
-                config.moe_layers = [int(x.strip()) for x in moe_layers_input.split(',')]
-
-            # Show MoE configuration summary
-            moe_layer_count = len(config.moe_layers) if config.moe_layers else config.n_layers
-            print(f"\n  {Colors.GREEN}✓{Colors.RESET} MoE Configuration:")
-            print(f"     {Colors.BOLD}{config.num_experts}{Colors.RESET} experts per layer, top-{Colors.BOLD}{config.num_experts_per_token}{Colors.RESET} routing")
-            print(f"     {Colors.BOLD}{moe_layer_count}/{config.n_layers}{Colors.RESET} layers using MoE")
-            print(f"     Expert type: {Colors.BOLD}{config.activation}{Colors.RESET} with d_ff={Colors.BOLD}{config.d_ff}{Colors.RESET}")
-
-    elif config.model_architecture == "mamba2":
-        # Mamba2-specific configuration
-        print_subsection("Mamba2 State-Space Architecture", "🌊")
-
-        print(f"\n  {Colors.CYAN}ℹ{Colors.RESET}  Mamba2 replaces attention with state-space models")
-        print(f"     {Colors.DIM}Offers O(N) complexity and efficient long-context processing{Colors.RESET}")
-        print(f"     {Colors.DIM}Uses custom PyTorch implementation (no external dependencies){Colors.RESET}")
-        print()
-
-        config.state_size = get_input(
-            "SSM state dimension (d_state)",
-            default=config.state_size,
-            type_fn=int
-        )
-
-        config.expand_factor = get_input(
-            "Hidden dimension expansion factor",
-            default=config.expand_factor,
-            type_fn=int
-        )
-
-        config.conv_kernel_size = get_input(
-            "Convolution kernel size",
-            default=config.conv_kernel_size,
-            type_fn=int
-        )
-
-        print(f"\n  {Colors.DIM}Note: dt_rank is auto-computed if not specified{Colors.RESET}")
-        dt_rank_input = get_input(
-            "Time-step projection rank (or 'auto')",
-            default="auto"
-        )
-        if dt_rank_input.lower() == "auto":
-            config.dt_rank = None  # Will be auto-computed
-        else:
-            config.dt_rank = int(dt_rank_input)
-
-        print(f"\n  {Colors.DIM}Multi-head configuration (affects memory and parallelism){Colors.RESET}")
-        config.headdim = get_input(
-            "Head dimension (32, 64, or 128)",
-            default=config.headdim,
-            type_fn=int
-        )
-
-        config.ngroups = get_input(
-            "Number of groups (1=no grouping, 8=grouped for efficiency)",
-            default=config.ngroups,
-            type_fn=int
-        )
-
-        print(f"\n  {Colors.DIM}Chunk size for processing (affects memory usage){Colors.RESET}")
-        config.chunk_size = get_input(
-            "Chunk size (128, 256, or 512)",
-            default=config.chunk_size,
-            type_fn=int
-        )
+        # Show MoE configuration summary
+        moe_layer_count = len(config.moe_layers) if config.moe_layers else config.n_layers
+        print(f"\n  {Colors.GREEN}✓{Colors.RESET} MoE Configuration:")
+        print(f"     {Colors.BOLD}{config.num_experts}{Colors.RESET} experts per layer, top-{Colors.BOLD}{config.num_experts_per_token}{Colors.RESET} routing")
+        print(f"     {Colors.BOLD}{moe_layer_count}/{config.n_layers}{Colors.RESET} layers using MoE")
+        print(f"     Expert type: {Colors.BOLD}{config.activation}{Colors.RESET} with d_ff={Colors.BOLD}{config.d_ff}{Colors.RESET}")
 
     # Save config
     print_subsection("Save Configuration", "💾")
 
-    # Suggest appropriate default filename based on architecture
-    if config.model_architecture == "mamba2":
-        default_save_path = "/app/data/model_config_mamba2.json"
-    else:
-        default_save_path = "/app/data/model_config.json"
+    default_save_path = "/app/data/model_config.json"
 
     save_path = get_input("Save config to", default=default_save_path)
 
@@ -401,10 +328,6 @@ def configure_model():
     print(f"  {Colors.WHITE}HuggingFace config:{Colors.RESET} {Colors.CYAN}{hf_config_path}{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.GREEN}{'─' * 60}{Colors.RESET}")
 
-    if config.model_architecture == "mamba2":
-        print(f"\n  {Colors.CYAN}ℹ{Colors.RESET}  {Colors.BOLD}Using custom PyTorch Mamba2 implementation{Colors.RESET}")
-        print(f"     No external dependencies required")
-        print(f"     Works with gradient checkpointing for memory efficiency")
 
 
 def configure_training():
@@ -1213,15 +1136,6 @@ def checkpoint_info():
                     print(f"    {Colors.BOLD}MoE Layers:{Colors.RESET} {model_config.moe_layers}")
                 else:
                     print(f"    {Colors.BOLD}MoE Layers:{Colors.RESET} All layers")
-
-        elif arch == "mamba2":
-            print(f"\n  {Colors.DIM}Mamba2-specific:{Colors.RESET}")
-            print(f"    {Colors.BOLD}State Size:{Colors.RESET} {model_config.state_size}")
-            print(f"    {Colors.BOLD}Expand Factor:{Colors.RESET} {model_config.expand_factor}")
-            print(f"    {Colors.BOLD}Head Dimension:{Colors.RESET} {model_config.headdim}")
-            print(f"    {Colors.BOLD}Number of Groups:{Colors.RESET} {model_config.ngroups}")
-            print(f"    {Colors.BOLD}Chunk Size:{Colors.RESET} {model_config.chunk_size}")
-            print(f"    {Colors.BOLD}Conv Kernel Size:{Colors.RESET} {model_config.conv_kernel_size}")
 
         # Parameter count
         total_params = sum(p.numel() for p in state_dict.values() if isinstance(p, torch.Tensor))

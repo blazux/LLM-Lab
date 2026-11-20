@@ -2,7 +2,9 @@ from .data import (
     load_tokenizer,
     StreamingTokenDataset,
     lm_collate_fn,
-    create_token_stream
+    lm_collate_fn_docs,
+    create_token_stream,
+    validate_dataset_separation
 )
 from .sft_data import (
     create_sft_dataset,
@@ -19,7 +21,9 @@ __all__ = [
     'load_tokenizer',
     'StreamingTokenDataset',
     'lm_collate_fn',
+    'lm_collate_fn_docs',
     'create_token_stream',
+    'validate_dataset_separation',
     'create_sft_dataset',
     'sft_collate_fn',
     'SFTDataset',

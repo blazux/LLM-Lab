@@ -1,10 +1,9 @@
 # ============================================================================
-# LLM-Lab Standard Image (Without mamba-ssm)
+# LLM-Lab Image
 # ============================================================================
-# This Dockerfile builds an image with CUDA 12.8 and PyTorch 2.7.0 support.
-# Uses PyTorch-based Mamba2 implementation (no mamba-ssm optimized kernels).
+# This Dockerfile builds an image with CUDA 13.0 and PyTorch 2.13.0 support.
 #
-# Supports: RTX 5090/5080 (Blackwell), RTX 40xx, RTX 30xx, RTX 20xx, A100, H100, V100
+# Validated on RTX 5090. Other GPUs require their own compatibility checks.
 #
 # Build command:
 #   docker build -f Dockerfile -t blazux/llm-lab:latest .
@@ -14,6 +13,7 @@
 # ============================================================================
 
 # Multi-stage build for efficiency
+ARG RUNTIME_IMAGE=python:3.11-slim
 FROM node:20-slim AS frontend-builder
 
 # Set working directory for frontend
@@ -31,21 +31,8 @@ COPY gui/frontend/ ./
 # Build frontend for production
 RUN npm run build
 
-# ---- GUI v2 ----
-FROM node:20-slim AS frontend-v2-builder
-
-WORKDIR /app/gui-v2/frontend
-
-COPY gui-v2/frontend/package*.json ./
-RUN npm ci
-
-COPY gui-v2/frontend/ ./
-
-# Build with /v2/ base path so it can be served alongside v1
-RUN npm run build -- --base=/v2/
-
 # Main stage - CUDA-enabled base image
-FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
+FROM ${RUNTIME_IMAGE}
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -54,45 +41,37 @@ ENV TZ=UTC
 # Set working directory
 WORKDIR /app
 
-# Install Python 3.11 and system dependencies
-RUN apt-get update && apt-get install -y \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y \
-    python3.11 \
-    python3.11-dev \
-    python3.11-distutils \
-    python3-pip \
-    git \
-    build-essential \
+# PyTorch CUDA wheels provide the runtime libraries; --gpus mounts the host driver.
+# Keeping Python in the base removes the Ubuntu-only PPA bootstrap dependency.
+RUN apt-get update && apt-get install -y --no-install-recommends git build-essential libgomp1 \
     && rm -rf /var/lib/apt/lists/*
-
-# Set Python 3.11 as default
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
-    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
 # Upgrade pip
 RUN python -m pip install --upgrade pip setuptools wheel
 
 # Copy Python requirements
-COPY requirements.txt ./
+COPY requirements.txt constraints.txt ./
 COPY gui/backend/requirements.txt ./gui/backend/
 
-# Install PyTorch 2.7.0 stable with CUDA 12.8 support (RTX 50xx series compatible)
-RUN pip install --no-cache-dir torch>=2.7.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# Use the same baseline as bootstrap.sh. CPU builds can override these args.
+ARG TORCH_CHANNEL=cu130
+RUN python -m pip install --no-cache-dir "torch==2.13.0+${TORCH_CHANNEL}" --index-url "https://download.pytorch.org/whl/${TORCH_CHANNEL}"
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir -r gui/backend/requirements.txt
+RUN python -m pip install --no-cache-dir -c constraints.txt -r requirements.txt -r gui/backend/requirements.txt
 
 # Copy application code
 COPY src/ ./src/
 COPY gui/backend/ ./gui/backend/
-COPY llm-lab.sh ./
+COPY llm-lab.sh LICENSE VERSION README.md CHANGELOG.md ./
+COPY scripts/ ./scripts/
+COPY examples/ ./examples/
+COPY recipes/ ./recipes/
+COPY docs/ ./docs/
+COPY tests/ ./tests/
 
-# Copy built frontends from builder stages
+# Copy built frontend from builder stage
 COPY --from=frontend-builder /app/gui/frontend/dist ./gui/frontend/dist
-COPY --from=frontend-v2-builder /app/gui-v2/frontend/dist ./gui-v2/frontend/dist
 
 # Create necessary directories
 RUN mkdir -p data/checkpoints \

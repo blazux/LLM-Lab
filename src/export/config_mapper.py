@@ -48,16 +48,22 @@ def get_architecture_info(model_config) -> Dict[str, Any]:
         "use_moe": get('use_moe', False),
         "num_experts": get('num_experts'),
         "num_experts_per_token": get('num_experts_per_token'),
+        "moe_layers": get('moe_layers'),
+        "moe_router_type": get('moe_router_type', 'softmax'),
+        "moe_aux_free_bias": get('moe_aux_free_bias', False),
+        "moe_shared_expert": get('moe_shared_expert', False),
         # MLA
         "d_latent": get('d_latent'),
         "d_rope_latent": get('d_rope_latent'),
-        # Mamba2
-        "state_size": get('state_size', 64),
-        "expand_factor": get('expand_factor', 2),
-        "headdim": get('headdim', 64),
-        "ngroups": get('ngroups', 1),
-        "chunk_size": get('chunk_size', 256),
-        "conv_kernel_size": get('conv_kernel_size', 4),
+        # Modern attention options
+        "use_attention_gate": get('use_attention_gate', False),
+        "nope_every": get('nope_every'),
+        "rope_fraction": get('rope_fraction', 0.5),
+        "hybrid_pattern": get('hybrid_pattern'),
+        "use_sparse_attention": get('use_sparse_attention', False),
+        "sparse_top_k": get('sparse_top_k', 512),
+        "sparse_indexer_heads": get('sparse_indexer_heads', 4),
+        "sparse_indexer_dim": get('sparse_indexer_dim', 32),
     }
 
 
@@ -185,6 +191,14 @@ def _generate_custom_transformer_config(arch_info: Dict[str, Any]) -> Dict[str, 
         "attention_type": arch_info["attention_type"],
         "attention_bias": arch_info["attention_bias"],
         "num_key_value_heads": arch_info["n_kv_heads"],
+        "use_attention_gate": arch_info.get("use_attention_gate", False),
+        "nope_every": arch_info.get("nope_every"),
+        "rope_fraction": arch_info.get("rope_fraction", 0.5),
+        "hybrid_pattern": arch_info.get("hybrid_pattern"),
+        "use_sparse_attention": arch_info.get("use_sparse_attention", False),
+        "sparse_top_k": arch_info.get("sparse_top_k", 512),
+        "sparse_indexer_heads": arch_info.get("sparse_indexer_heads", 4),
+        "sparse_indexer_dim": arch_info.get("sparse_indexer_dim", 32),
 
         # Normalization
         "norm_type": arch_info["norm_type"],
@@ -220,52 +234,10 @@ def _generate_custom_transformer_config(arch_info: Dict[str, Any]) -> Dict[str, 
         config["use_moe"] = True
         config["num_experts"] = arch_info["num_experts"]
         config["num_experts_per_token"] = arch_info["num_experts_per_token"]
-
-    # Remove None values
-    config = {k: v for k, v in config.items() if v is not None}
-
-    return config
-
-
-def _generate_mamba2_config(arch_info: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate custom Mamba2 config.json"""
-
-    config = {
-        "architectures": ["Mamba2LLM"],
-        "model_type": "llm-lab-mamba2",
-        "torch_dtype": "bfloat16",
-
-        # Auto-mapping for transformers library
-        "auto_map": {
-            "AutoConfig": "configuration_llmlab.LLMLabConfig",
-            "AutoModelForCausalLM": "modeling_llmlab.Mamba2LLM"
-        },
-
-        # Core architecture
-        "hidden_size": arch_info["d_model"],
-        "num_hidden_layers": arch_info["n_layers"],
-        "vocab_size": arch_info["vocab_size"],
-        "max_position_embeddings": arch_info["max_seq_len"],
-
-        # Mamba2-specific
-        "d_model": arch_info["d_model"],
-        "n_layers": arch_info["n_layers"],
-        "state_size": arch_info["state_size"],
-        "expand_factor": arch_info["expand_factor"],
-        "headdim": arch_info["headdim"],
-        "ngroups": arch_info["ngroups"],
-        "chunk_size": arch_info["chunk_size"],
-        "conv_kernel_size": arch_info["conv_kernel_size"],
-
-        # Normalization
-        "norm_type": arch_info["norm_type"],
-        "norm_eps": arch_info["norm_eps"],
-        "rms_norm_eps": arch_info["norm_eps"] if arch_info["norm_type"] == "rmsnorm" else None,
-
-        # Other
-        "tie_word_embeddings": arch_info["tie_word_embeddings"],
-        "is_encoder_decoder": False,
-    }
+        config["moe_layers"] = arch_info.get("moe_layers")
+        config["moe_router_type"] = arch_info.get("moe_router_type", "softmax")
+        config["moe_aux_free_bias"] = arch_info.get("moe_aux_free_bias", False)
+        config["moe_shared_expert"] = arch_info.get("moe_shared_expert", False)
 
     # Remove None values
     config = {k: v for k, v in config.items() if v is not None}
@@ -298,8 +270,6 @@ def generate_hf_config(
         config = _generate_llama_config(arch_info)
     elif format_info.format == ExportFormat.MIXTRAL:
         config = _generate_mixtral_config(arch_info)
-    elif arch_info["model_architecture"] == "mamba2":
-        config = _generate_mamba2_config(arch_info)
     else:
         config = _generate_custom_transformer_config(arch_info)
 

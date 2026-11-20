@@ -7,7 +7,7 @@ and publish them to HuggingFace Hub.
 Supported export formats:
 - llama: For GQA/MHA + RoPE + SwiGLU models (vLLM compatible)
 - mixtral: For MoE models (vLLM compatible)
-- custom: For MLA, Mamba2, or other custom architectures (requires trust_remote_code)
+- custom: For MLA, MoE, or other custom architectures (requires trust_remote_code)
 """
 
 from .converter import (

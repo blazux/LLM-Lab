@@ -31,47 +31,31 @@ def _estimate_parameters(arch_info: Dict[str, Any]) -> int:
     n_heads = arch_info["n_heads"]
     n_kv_heads = arch_info.get("n_kv_heads") or n_heads
 
-    if arch_info["model_architecture"] == "mamba2":
-        # Mamba2 parameter estimation
-        expand = arch_info.get("expand_factor", 2)
-        d_inner = d_model * expand
-        state_size = arch_info.get("state_size", 64)
+    # Transformer parameter estimation
+    embed_params = vocab_size * d_model
+    d_k = d_model // n_heads
 
-        embed_params = vocab_size * d_model
-        layer_params = (
-            d_model * 2 * d_inner +  # in_proj
-            d_inner * 4 +  # conv
-            d_inner * state_size * 3 +  # A, B, C
-            d_inner +  # D
-            d_inner * d_model  # out_proj
-        )
-        return embed_params + n_layers * layer_params
+    # Attention params
+    attn_params = (
+        d_model * d_model +  # Q
+        d_model * n_kv_heads * d_k +  # K
+        d_model * n_kv_heads * d_k +  # V
+        d_model * d_model  # O
+    )
+
+    # FFN params (SwiGLU has 3 projections)
+    if arch_info.get("activation") in ["swiglu", "geglu", "reglu"]:
+        ffn_params = 3 * d_model * d_ff
     else:
-        # Transformer parameter estimation
-        embed_params = vocab_size * d_model
-        d_k = d_model // n_heads
+        ffn_params = 2 * d_model * d_ff
 
-        # Attention params
-        attn_params = (
-            d_model * d_model +  # Q
-            d_model * n_kv_heads * d_k +  # K
-            d_model * n_kv_heads * d_k +  # V
-            d_model * d_model  # O
-        )
+    # MoE multiplier
+    if arch_info.get("use_moe"):
+        num_experts = arch_info.get("num_experts", 8)
+        ffn_params = ffn_params * num_experts + d_model * num_experts  # + router
 
-        # FFN params (SwiGLU has 3 projections)
-        if arch_info.get("activation") in ["swiglu", "geglu", "reglu"]:
-            ffn_params = 3 * d_model * d_ff
-        else:
-            ffn_params = 2 * d_model * d_ff
-
-        # MoE multiplier
-        if arch_info.get("use_moe"):
-            num_experts = arch_info.get("num_experts", 8)
-            ffn_params = ffn_params * num_experts + d_model * num_experts  # + router
-
-        layer_params = attn_params + ffn_params + 2 * d_model  # + norms
-        return embed_params + n_layers * layer_params
+    layer_params = attn_params + ffn_params + 2 * d_model  # + norms
+    return embed_params + n_layers * layer_params
 
 
 def generate_model_card(
@@ -108,15 +92,10 @@ def generate_model_card(
     param_count = _estimate_parameters(arch_info)
 
     # Build tags list
-    all_tags = ["text-generation", "llm-lab"]
-    if arch_info["model_architecture"] == "mamba2":
-        all_tags.append("mamba")
-        all_tags.append("state-space-model")
-    else:
-        all_tags.append("transformer")
-        if arch_info.get("use_moe"):
-            all_tags.append("moe")
-            all_tags.append("mixture-of-experts")
+    all_tags = ["text-generation", "llm-lab", "transformer"]
+    if arch_info.get("use_moe"):
+        all_tags.append("moe")
+        all_tags.append("mixture-of-experts")
 
     if format_info.vllm_compatible:
         all_tags.append("vllm")
@@ -148,9 +127,7 @@ def generate_model_card(
     display_name = model_name or "LLM-Lab Model"
 
     # Architecture description
-    if arch_info["model_architecture"] == "mamba2":
-        arch_desc = "Mamba2 State Space Model"
-    elif arch_info.get("use_moe"):
+    if arch_info.get("use_moe"):
         arch_desc = f"Mixture of Experts Transformer ({arch_info['num_experts']} experts)"
     else:
         attn_type = arch_info.get("attention_type", "gqa").upper()

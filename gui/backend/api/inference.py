@@ -14,11 +14,14 @@ sys.path.insert(0, str(Path(project_root) / 'src'))
 
 from inference.inference import load_model_for_inference, generate_text
 
+from run_store import get_run_store
+
 router = APIRouter()
 
 # Global model cache (avoid reloading for consecutive requests)
 _model_cache = {
     "checkpoint_path": None,
+    "signature": None,
     "model": None,
     "tokenizer": None,
     "device": None,
@@ -45,51 +48,49 @@ class GenerateResponse(BaseModel):
 
 
 @router.get("/checkpoints")
-async def list_checkpoints():
+async def list_checkpoints(run_id: Optional[str] = None):
     """List available checkpoints"""
-    backend_dir = Path(__file__).parent.parent
-
-    # Check /app/data for all checkpoints
-    checkpoints_dir = Path("/app/data")
-
     checkpoints = []
-    if checkpoints_dir.exists():
-        for ckpt_file in checkpoints_dir.glob("*.pt"):
-            # Get file stats
-            stat = ckpt_file.stat()
+    try:
+        files = get_run_store().checkpoint_files(run_id)
+    except KeyError:
+        raise HTTPException(404, 'Run not found')
+    for ckpt_file in files:
+        # Get file stats
+        stat = ckpt_file.stat()
 
-            # Try to load checkpoint metadata
-            try:
-                checkpoint = torch.load(str(ckpt_file), map_location="cpu", weights_only=False)
-                step = checkpoint.get('step', 'N/A')
-                is_rlhf = 'rlhf_config' in checkpoint
-                is_sft = 'sft_config' in checkpoint
+        # Try to load checkpoint metadata
+        try:
+            checkpoint = torch.load(str(ckpt_file), map_location="cpu", weights_only=False)
+            step = checkpoint.get('step', 'N/A')
+            is_rlhf = 'rlhf_config' in checkpoint
+            is_sft = 'sft_config' in checkpoint
 
-                if is_rlhf:
-                    model_type = "RLHF"
-                elif is_sft:
-                    model_type = "SFT"
-                else:
-                    model_type = "Base"
+            if is_rlhf:
+                model_type = "RLHF"
+            elif is_sft:
+                model_type = "SFT"
+            else:
+                model_type = "Base"
 
-                checkpoints.append({
-                    "name": ckpt_file.name,
-                    "path": str(ckpt_file),
-                    "step": step,
-                    "type": model_type,
-                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                    "modified": stat.st_mtime
-                })
-            except Exception as e:
-                # If we can't load the checkpoint, still list it but with minimal info
-                checkpoints.append({
-                    "name": ckpt_file.name,
-                    "path": str(ckpt_file),
-                    "step": "Unknown",
-                    "type": "Unknown",
-                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                    "modified": stat.st_mtime
-                })
+            checkpoints.append({
+                "name": f"{ckpt_file.parent.parent.name if ckpt_file.parent.name == 'checkpoints' else ckpt_file.parent.name} / {ckpt_file.name}",
+                "path": str(ckpt_file),
+                "step": step,
+                "type": model_type,
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "modified": stat.st_mtime
+            })
+        except Exception as e:
+            # If we can't load the checkpoint, still list it but with minimal info
+            checkpoints.append({
+                "name": f"{ckpt_file.parent.parent.name if ckpt_file.parent.name == 'checkpoints' else ckpt_file.parent.name} / {ckpt_file.name}",
+                "path": str(ckpt_file),
+                "step": "Unknown",
+                "type": "Unknown",
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "modified": stat.st_mtime
+            })
 
     # Sort by modified time (newest first)
     checkpoints.sort(key=lambda x: x['modified'], reverse=True)
@@ -108,12 +109,13 @@ async def generate(request: GenerateRequest):
 
     try:
         # Load model (use cache if same checkpoint)
-        if _model_cache["checkpoint_path"] != request.checkpoint_path:
+        stat = Path(request.checkpoint_path).stat()
+        signature = (str(Path(request.checkpoint_path).resolve()), stat.st_mtime_ns, stat.st_size)
+        if _model_cache.get("signature") != signature:
             # Clear old model from cache if exists
             if _model_cache["model"] is not None:
                 print("Clearing previous model from memory...")
-                del _model_cache["model"]
-                del _model_cache["tokenizer"]
+                _model_cache.update(model=None, tokenizer=None, signature=None)
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
@@ -125,7 +127,9 @@ async def generate(request: GenerateRequest):
             is_chat_model = 'sft_config' in checkpoint or 'rlhf_config' in checkpoint
             del checkpoint
 
+            _model_cache.update(checkpoint_path=None, signature=None, model=None, tokenizer=None)
             model, tokenizer, device = load_model_for_inference(request.checkpoint_path)
+            _model_cache["signature"] = signature
             _model_cache["checkpoint_path"] = request.checkpoint_path
             _model_cache["model"] = model
             _model_cache["tokenizer"] = tokenizer

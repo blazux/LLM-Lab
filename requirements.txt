@@ -1,8 +1,8 @@
-torch>=2.7.0
-transformers>=4.30.0
+# Supported runtime baseline. Install the CPU/CUDA Torch wheel first (see scripts/bootstrap.sh).
+torch==2.13.0
+transformers==5.20.1
 datasets>=2.14.0
 tqdm>=4.65.0
-peft>=0.4.0
+peft>=0.21.2
 fpdf2>=2.7.0
 matplotlib>=3.7.0
-bitsandbytes>=0.43.0

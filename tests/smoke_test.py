@@ -8,7 +8,6 @@ Sections:
   4.  Training backward: gradients flow through all attention types
   5.  DPO/PPO/GRPO tuple unpacking + backward
   6.  SFT forward + ignore_index=-100
-  7.  Mamba2 forward + use_cache shape
   8.  MoE forward: aux_loss non-None + backward
   9.  Activation functions: swiglu / geglu / reglu / gelu / relu
   10. Norm types: rmsnorm / layernorm
@@ -307,35 +306,6 @@ def test_sft_forward():
 
 
 # ---------------------------------------------------------------------------
-# 7. Mamba2 forward + use_cache shape
-# ---------------------------------------------------------------------------
-def test_mamba2_forward():
-    print("\n[7] Mamba2 forward + use_cache shape")
-    try:
-        cfg = ModelConfig(
-            model_architecture="mamba2",
-            tokenizer_name="Qwen/Qwen2.5-0.5B",
-            d_model=64, n_layers=2, vocab_size=VOCAB,
-            max_seq_len=64, state_size=16, expand_factor=2,
-            headdim=16, chunk_size=8,
-        )
-        model = make_model(cfg)
-        model.eval()
-        x = rand_ids(batch=1, seq=SEQ)
-
-        with torch.no_grad():
-            out = model(x)
-        assert out[0].shape == (1, SEQ, VOCAB), f"shape={out[0].shape}"
-
-        out_cached = model(x, use_cache=True)
-        assert len(out_cached) == 3, "use_cache should return 3-tuple"
-        ok("mamba2 forward + use_cache shape")
-        del model
-    except Exception as e:
-        fail("mamba2", e)
-
-
-# ---------------------------------------------------------------------------
 # 8. MoE forward: aux_loss non-None + backward
 # ---------------------------------------------------------------------------
 def test_moe_forward():
@@ -439,10 +409,11 @@ def test_sliding_window_kv_cache():
                     out = model(tok, past_key_values=past_kv, use_cache=True)
                     assert torch.isfinite(out[0]).all(), "non-finite logits"
                     past_kv = out[2]
-                    # After truncation, KV should be ≤ SW
+                    # After truncation, KV keeps SW+1 keys: the training mask
+                    # allows positions [i-SW, i] inclusive, i.e. SW+1 keys
                     for layer_kv in past_kv:
-                        assert layer_kv[0].size(2) <= SW, \
-                            f"KV len {layer_kv[0].size(2)} > window {SW}"
+                        assert layer_kv[0].size(2) <= SW + 1, \
+                            f"KV len {layer_kv[0].size(2)} > window+1 {SW + 1}"
 
             ok(name)
             del model
@@ -686,8 +657,8 @@ def test_mla_sliding_window_kv_cache():
                     assert torch.isfinite(out[0]).all(), "non-finite logits"
                     past_kv = out[2]
                     for layer_kv in past_kv:
-                        assert layer_kv[0].size(2) <= SW, \
-                            f"KV len {layer_kv[0].size(2)} > window {SW}"
+                        assert layer_kv[0].size(2) <= SW + 1, \
+                            f"KV len {layer_kv[0].size(2)} > window+1 {SW + 1}"
 
             ok(name)
             del model
@@ -748,35 +719,116 @@ def test_lora():
 
 
 # ---------------------------------------------------------------------------
-# 21. Mamba2 backward pass
+# 21b. Modern components — GDN hybrid, sparse attention, doc masks
 # ---------------------------------------------------------------------------
-def test_mamba2_backward():
-    print("\n[21] Mamba2 backward — gradients flow")
+def test_modern_components():
+    print("\n[21b] Modern components — GDN hybrid / sparse / doc masks")
     try:
-        cfg = ModelConfig(
-            model_architecture="mamba2",
-            tokenizer_name="Qwen/Qwen2.5-0.5B",
-            d_model=64, n_layers=2, vocab_size=VOCAB,
-            max_seq_len=64, state_size=16, expand_factor=2,
-            headdim=16, chunk_size=8,
-        )
-        model = make_model(cfg)
-        model.train()
-
-        x       = rand_ids(batch=1, seq=SEQ)
-        targets = rand_ids(batch=1, seq=SEQ)
-        out     = model(x)
-        logits  = out[0]
-        loss    = F.cross_entropy(logits.view(-1, VOCAB), targets.view(-1))
-        loss.backward()
-
-        grad_norms = [p.grad.norm().item() for p in model.parameters() if p.grad is not None]
-        assert grad_norms, "no gradients in Mamba2"
-        assert max(grad_norms) > 0, "all-zero Mamba2 gradients"
-        ok(f"mamba2 backward (max_grad={max(grad_norms):.4f})")
-        del model
+        from model.gdn import recurrent_gated_delta_rule, chunk_gated_delta_rule
+        torch.manual_seed(0)
+        q = F.normalize(torch.randn(2, 50, 4, 16, device=DEVICE), p=2, dim=-1)
+        k = F.normalize(torch.randn(2, 50, 4, 16, device=DEVICE), p=2, dim=-1)
+        v = torch.randn(2, 50, 4, 16, device=DEVICE)
+        beta = torch.rand(2, 50, 4, device=DEVICE).sigmoid()
+        g = F.logsigmoid(torch.rand(2, 50, 4, device=DEVICE))
+        o_rec, _ = recurrent_gated_delta_rule(q, k, v, beta, g)
+        o_chk, _ = chunk_gated_delta_rule(q, k, v, beta, g, chunk_size=16)
+        d = (o_rec - o_chk).abs().max().item()
+        assert d < 1e-4, f"chunk vs recurrent diff {d}"
+        ok(f"gdn chunkwise == recurrent (diff={d:.1e})")
     except Exception as e:
-        fail("mamba2_backward", e)
+        fail("gdn_equivalence", e)
+
+    try:
+        # doc boundaries: mid-chunk (23) and mid-sequence (37) with chunk_size 16
+        doc = torch.zeros(2, 50, dtype=torch.long, device=DEVICE)
+        doc[:, 23:37] = 1
+        doc[:, 37:] = 2
+        o_rec, _ = recurrent_gated_delta_rule(q, k, v, beta, g, doc_ids=doc)
+        o_chk, _ = chunk_gated_delta_rule(q, k, v, beta, g, chunk_size=16, doc_ids=doc)
+        d = (o_rec - o_chk).abs().max().item()
+        assert d < 1e-4, f"doc chunk vs recurrent diff {d}"
+        # exact isolation: middle doc must equal running it alone from zero state
+        sl = slice(23, 37)
+        o_alone, _ = chunk_gated_delta_rule(q[:, sl], k[:, sl], v[:, sl],
+                                            beta[:, sl], g[:, sl], chunk_size=16)
+        d2 = (o_chk[:, sl] - o_alone).abs().max().item()
+        assert d2 < 1e-4, f"gdn doc leak {d2}"
+        ok(f"gdn doc masks isolate documents (parity={d:.1e}, leak={d2:.1e})")
+    except Exception as e:
+        fail("gdn_doc_masks", e)
+
+    try:
+        cfg = ModelConfig(model_architecture="transformer", tokenizer_name="Qwen/Qwen2.5-0.5B",
+                          d_model=64, n_layers=4, n_heads=4, n_kv_heads=2, d_ff=128,
+                          vocab_size=VOCAB, max_seq_len=64, hybrid_pattern="1:1")
+        m = make_model(cfg).float(); m.eval()
+        a, b = rand_ids(batch=1, seq=8), rand_ids(batch=1, seq=9)
+        packed = torch.cat([a, b], dim=1)
+        doc_ids = torch.tensor([[0]*8 + [1]*9], device=DEVICE)
+        with torch.no_grad():
+            pk = m(packed, doc_ids=doc_ids)[0]
+            alone = m(b)[0]
+        d = (pk[:, 8:] - alone).abs().max().item()
+        assert d < 1e-3, f"hybrid doc mask leak {d}"
+        ok(f"hybrid GDN layers respect doc masks (diff={d:.1e})")
+        del m
+    except Exception as e:
+        fail("hybrid_doc_masks", e)
+
+    try:
+        cfg = ModelConfig(model_architecture="transformer", tokenizer_name="Qwen/Qwen2.5-0.5B",
+                          d_model=64, n_layers=4, n_heads=4, n_kv_heads=2, d_ff=128,
+                          vocab_size=VOCAB, max_seq_len=64, hybrid_pattern="3:1")
+        m = make_model(cfg); m.eval()
+        x = rand_ids(batch=1, seq=20)
+        with torch.no_grad():
+            full = m(x)[0]
+            l1, _, kv = m(x[:, :19], use_cache=True)
+            l2, _, kv = m(x[:, 19:20], past_key_values=kv, use_cache=True)
+        d = (full[:, -1] - l2[:, 0]).abs().max().item()
+        assert d < 1e-2, d
+        ok(f"hybrid 3:1 decode (diff={d:.1e})")
+        del m
+    except Exception as e:
+        fail("hybrid_decode", e)
+
+    try:
+        cfg = ModelConfig(model_architecture="transformer", tokenizer_name="Qwen/Qwen2.5-0.5B",
+                          d_model=64, n_layers=2, n_heads=4, n_kv_heads=2, d_ff=128,
+                          vocab_size=VOCAB, max_seq_len=64)
+        m = make_model(cfg).float(); m.eval()  # fp32: this is an exactness property
+        a, b = rand_ids(batch=1, seq=8), rand_ids(batch=1, seq=9)
+        packed = torch.cat([a, b], dim=1)
+        doc_ids = torch.tensor([[0]*8 + [1]*9], device=DEVICE)
+        with torch.no_grad():
+            pk = m(packed, doc_ids=doc_ids)[0]
+            alone = m(b)[0]
+        d = (pk[:, 8:] - alone).abs().max().item()
+        # tolerance: SDPA bool-mask vs causal-flag kernels accumulate in
+        # different orders (~1e-4); true cross-doc leakage measures ~1e-1
+        assert d < 1e-3, f"doc mask leak {d}"
+        ok(f"doc-boundary masks isolate documents (diff={d:.1e})")
+        del m
+    except Exception as e:
+        fail("doc_masks", e)
+
+    try:
+        cfg = ModelConfig(model_architecture="transformer", tokenizer_name="Qwen/Qwen2.5-0.5B",
+                          d_model=64, n_layers=2, n_heads=4, n_kv_heads=2, d_ff=128,
+                          vocab_size=VOCAB, max_seq_len=64,
+                          use_sparse_attention=True, sparse_top_k=4)
+        m = make_model(cfg); m.train()
+        x = rand_ids(batch=1, seq=16)
+        out, aux = m(x)
+        assert aux is not None and torch.isfinite(aux)
+        (out.float().pow(2).mean() + aux).backward()
+        gs = [p.grad.norm().item() for n, p in m.named_parameters() if 'indexer' in n]
+        assert len(gs) == 6 and max(gs) > 0
+        ok(f"sparse DSA indexer trains (aux={float(aux):.3f})")
+        del m
+    except Exception as e:
+        fail("sparse_attention", e)
 
 
 # ---------------------------------------------------------------------------
@@ -941,7 +993,6 @@ def run_all():
         test_backward_all_attn,
         test_rlhf_tuple_unpacking,
         test_sft_forward,
-        test_mamba2_forward,
         test_moe_forward,
         test_activation_functions,
         test_norm_types,
@@ -955,7 +1006,7 @@ def run_all():
         test_moe_kv_cache,
         test_mla_sliding_window_kv_cache,
         test_lora,
-        test_mamba2_backward,
+        test_modern_components,
         test_single_token_input,
         test_sft_masking_multi_turn,
         test_training_cleanup_no_undefined_vars,

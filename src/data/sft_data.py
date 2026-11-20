@@ -4,6 +4,26 @@ from datasets import load_dataset, interleave_datasets, get_dataset_config_info
 import random
 
 
+# Default chat template (standard ChatML) used when the tokenizer has none.
+# The {% generation %} tags mark assistant content so that
+# apply_chat_template(..., return_assistant_tokens_mask=True) can return a
+# per-token assistant mask for loss masking.
+# This same template is applied at export time (src/export/hub.py) so the
+# tokenizer object is the single source of truth for the chat format.
+DEFAULT_CHAT_TEMPLATE = (
+    "{% for message in messages %}"
+    "{% if message['role'] == 'assistant' %}"
+    "{{ '<|im_start|>assistant\n' }}"
+    "{% generation %}{{ message['content'] }}{{ '<|im_end|>' }}{% endgeneration %}"
+    "{{ '\n' }}"
+    "{% else %}"
+    "{{ '<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n' }}"
+    "{% endif %}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
+)
+
+
 def list_dataset_splits(dataset_name: str, subset: str = None):
     """
     List available splits for a dataset
@@ -190,6 +210,115 @@ class SFTDataset(IterableDataset):
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
 
+        # Prefer the tokenizer's Jinja chat template for formatting + assistant
+        # loss masking. If the tokenizer has no template, install the standard
+        # ChatML template as the default (single source of truth: the tokenizer
+        # object, which is also what gets saved at export time).
+        self.use_chat_template = False
+        if hasattr(tokenizer, 'apply_chat_template'):
+            if getattr(tokenizer, 'chat_template', None) is None:
+                try:
+                    tokenizer.chat_template = DEFAULT_CHAT_TEMPLATE
+                    print("✓ Tokenizer had no chat template — installed default ChatML template")
+                except Exception:
+                    pass
+            if getattr(tokenizer, 'chat_template', None) is not None:
+                self.use_chat_template = True
+
+    @staticmethod
+    def _normalize_messages(messages):
+        """Normalize roles/content to the standard chat-template format."""
+        norm = []
+        for msg in messages:
+            role = normalize_role(msg.get('role', 'user'))
+            content = msg.get('content', '')
+            if content is None:
+                content = ''
+            norm.append({"role": role, "content": str(content)})
+        return norm
+
+    def _chat_template_tokenize(self, messages):
+        """
+        Tokenize a conversation with the tokenizer's chat template and build a
+        per-token assistant mask (1 = assistant token, train on it).
+
+        Returns (input_ids, assistant_mask) as plain lists, or None if the
+        chat-template paths fail (caller then falls back to legacy markers).
+        """
+        tok = self.tokenizer
+        norm = self._normalize_messages(messages)
+        if not norm:
+            return None
+
+        def _flatten(values):
+            # Flatten a possibly nested [[...]] list (batch of one conversation)
+            if hasattr(values, 'tolist'):
+                values = values.tolist()
+            values = list(values)
+            if values and isinstance(values[0], (list, tuple)):
+                return list(values[0])
+            return values
+
+        def _to_id_list(res):
+            # apply_chat_template may return (depending on transformers version):
+            # a flat list of ids, a nested [[ids]], a BatchEncoding/dict with
+            # "input_ids", or tokenizers.Encoding objects.
+            if hasattr(res, 'keys') and 'input_ids' in res:
+                res = res['input_ids']
+            if hasattr(res, 'ids'):  # tokenizers.Encoding
+                return list(res.ids)
+            if hasattr(res, 'tolist'):
+                res = res.tolist()
+            res = list(res)
+            if res and hasattr(res[0], 'ids'):  # [Encoding]
+                return list(res[0].ids)
+            if res and isinstance(res[0], (list, tuple)):
+                return list(res[0])
+            return res
+
+        # Preferred path: native assistant-token mask via {% generation %} tags
+        try:
+            out = tok.apply_chat_template(
+                norm,
+                tokenize=True,
+                return_assistant_tokens_mask=True,
+                return_dict=True,
+            )
+            ids = _to_id_list(out["input_ids"])
+            mask = out.get("assistant_masks", None)
+            if mask is not None:
+                mask = _flatten(mask)
+            # An all-zeros mask means the template has no {% generation %} tags
+            if mask is not None and len(mask) == len(ids) and any(mask):
+                return ids, mask
+        except Exception:
+            pass
+
+        # Fallback path: per-message prefix tokenization; assistant spans are
+        # found by diffing tokenized prefix lengths.
+        try:
+            full_ids = _to_id_list(tok.apply_chat_template(norm, tokenize=True))
+            if not full_ids:
+                return None
+            mask = [0] * len(full_ids)
+            prev_len = 0
+            for i, msg in enumerate(norm):
+                prefix_ids = _to_id_list(tok.apply_chat_template(norm[:i + 1], tokenize=True))
+                cur_len = min(len(prefix_ids), len(full_ids))
+                if cur_len < prev_len:
+                    cur_len = prev_len
+                if msg["role"] == 'assistant':
+                    for j in range(prev_len, cur_len):
+                        mask[j] = 1
+                prev_len = cur_len
+            if any(mask):
+                return full_ids, mask
+        except Exception:
+            pass
+
+        # Last resort: signal the caller to use the legacy marker path
+        return None
+
     def __iter__(self):
         for item in self.dataset:
             try:
@@ -271,7 +400,27 @@ class SFTDataset(IterableDataset):
 
                 # Process messages format
                 if messages:
-                    # Use simple text markers that the model already knows
+                    # Preferred: tokenizer chat template with assistant-token mask.
+                    # Yields a dict so the collate fn can use the precomputed
+                    # labels (-100 on non-assistant tokens) directly.
+                    if self.use_chat_template:
+                        result = self._chat_template_tokenize(messages)
+                        if result is not None:
+                            ids, mask = result
+                            ids = ids[:self.max_seq_len]
+                            mask = mask[:self.max_seq_len]
+                            if len(ids) > 1:
+                                input_ids = torch.tensor(ids, dtype=torch.long)
+                                labels = torch.tensor(
+                                    [t if m else -100 for t, m in zip(ids, mask)],
+                                    dtype=torch.long
+                                )
+                                yield {"input_ids": input_ids, "labels": labels}
+                            continue
+                        # Chat-template path failed for this item — fall through
+                        # to the legacy text-marker formatting below.
+
+                    # Legacy fallback: simple text markers that the model already knows
                     # Format: "System: ...\n\nUser: ...\n\nAssistant: ...\n\n"
                     # This avoids needing special tokens and their associated training challenges
                     text = ""
@@ -350,7 +499,24 @@ def sft_collate_fn(batch, tokenizer=None, assistant_marker_tokens=None, user_mar
 
     Note: marker_tokens can be either a list (single tokenization) or a tuple of lists
     (multiple tokenization variants for different contexts like start-of-text vs after-newlines).
+
+    Batch items may be either:
+    - plain 1D token tensors (legacy path — masking via text markers), or
+    - dicts {"input_ids": tensor, "labels": tensor} produced by the chat-template
+      path, where labels already contain -100 on non-assistant tokens.
     """
+    # Normalize items: extract token sequences and optional precomputed labels
+    seqs = []
+    labels_list = []
+    for item in batch:
+        if isinstance(item, dict):
+            seqs.append(item["input_ids"])
+            labels_list.append(item.get("labels", None))
+        else:
+            seqs.append(item)
+            labels_list.append(None)
+    batch = seqs
+
     # Find max length in batch
     max_len = max(len(seq) for seq in batch)
 
@@ -374,10 +540,25 @@ def sft_collate_fn(batch, tokenizer=None, assistant_marker_tokens=None, user_mar
     x = batch_tensor[:, :-1].clone()
     y = batch_tensor[:, 1:].clone()
 
+    # Apply precomputed labels (chat-template path): targets come from the
+    # shifted labels, so non-assistant tokens are already -100.
+    for i, labels in enumerate(labels_list):
+        if labels is None:
+            continue
+        shifted = labels[1:]
+        row = torch.full((max_len - 1,), -100, dtype=torch.long)
+        n = min(len(shifted), max_len - 1)
+        if n > 0:
+            row[:n] = shifted[:n]
+        y[i] = row
+
     # Mask loss for non-assistant tokens (only train on assistant responses)
     # For multi-turn conversations, we need to mask ALL user/system turns
+    # (legacy marker path — skipped for items with precomputed labels)
     if assistant_marker_tokens is not None:
         for i in range(y.size(0)):
+            if labels_list[i] is not None:
+                continue
             seq_len = x.size(1)
             # Start with all positions masked
             mask = torch.ones(seq_len, dtype=torch.bool)

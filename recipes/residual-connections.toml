@@ -1,0 +1,62 @@
+"version" = 1
+
+["experiment"]
+"name" = "What do residual connections change?"
+"seed" = 42
+"device" = "cpu"
+"threads" = 4
+
+["data"]
+"format" = "text"
+"train" = "learning-data/train.txt"
+"validation" = "learning-data/validation.txt"
+
+["tokenizer"]
+"type" = "byte_bpe"
+"vocab_size" = 512
+"min_frequency" = 2
+
+["model"]
+"d_model" = 64
+"n_layers" = 2
+"n_heads" = 4
+"n_kv_heads" = 2
+"d_ff" = 128
+"max_seq_len" = 64
+"dropout" = 0.0
+"attention_type" = "gqa"
+"positional_encoding" = "rope"
+"norm_type" = "rmsnorm"
+"activation" = "swiglu"
+"tie_word_embeddings" = true
+"assembly" = { "version" = 1, "nodes" = [{ "id" = "tokens", "kind" = "tokens", "position" = { "x" = 160, "y" = 580 } }, { "id" = "embedding", "kind" = "embedding", "position" = { "x" = 160, "y" = 435 } }, { "id" = "block", "kind" = "repeat", "params" = { "count" = 2 }, "body" = { "version" = 1, "nodes" = [{ "id" = "entry", "kind" = "input_hidden", "position" = { "x" = 160, "y" = 1015 }, "params" = {  } }, { "id" = "norm1", "kind" = "rmsnorm", "position" = { "x" = 160, "y" = 870 }, "params" = {  } }, { "id" = "attn", "kind" = "attention", "position" = { "x" = 160, "y" = 725 }, "params" = { "heads" = 4, "kv_heads" = 2, "rope_fraction" = 0.5 } }, { "id" = "add1", "kind" = "add", "position" = { "x" = 160, "y" = 580 }, "params" = {  } }, { "id" = "norm2", "kind" = "rmsnorm", "position" = { "x" = 160, "y" = 435 }, "params" = {  } }, { "id" = "ffn", "kind" = "swiglu", "position" = { "x" = 160, "y" = 290 }, "params" = { "hidden" = 128 } }, { "id" = "add2", "kind" = "add", "position" = { "x" = 160, "y" = 145 }, "params" = {  } }, { "id" = "exit", "kind" = "output_hidden", "position" = { "x" = 160, "y" = 0 }, "params" = {  } }], "edges" = [{ "id" = "e0", "source" = "entry", "target" = "norm1", "targetHandle" = "in" }, { "id" = "e1", "source" = "norm1", "target" = "attn", "targetHandle" = "in" }, { "id" = "e2", "source" = "attn", "target" = "add1", "targetHandle" = "a" }, { "id" = "e3", "source" = "entry", "target" = "add1", "targetHandle" = "b" }, { "id" = "e4", "source" = "add1", "target" = "norm2", "targetHandle" = "in" }, { "id" = "e5", "source" = "norm2", "target" = "ffn", "targetHandle" = "in" }, { "id" = "e6", "source" = "ffn", "target" = "add2", "targetHandle" = "a" }, { "id" = "e7", "source" = "add1", "target" = "add2", "targetHandle" = "b" }, { "id" = "e8", "source" = "add2", "target" = "exit", "targetHandle" = "in" }] }, "position" = { "x" = 160, "y" = 290 } }, { "id" = "final_norm", "kind" = "rmsnorm", "position" = { "x" = 160, "y" = 145 } }, { "id" = "head", "kind" = "head", "position" = { "x" = 160, "y" = 0 } }], "edges" = [{ "id" = "e0", "source" = "tokens", "target" = "embedding", "targetHandle" = "in" }, { "id" = "e1", "source" = "embedding", "target" = "block", "targetHandle" = "in" }, { "id" = "e2", "source" = "block", "target" = "final_norm", "targetHandle" = "in" }, { "id" = "e3", "source" = "final_norm", "target" = "head", "targetHandle" = "in" }] }
+
+["training"]
+"max_steps" = 120
+"batch_size" = 4
+"gradient_accumulation_steps" = 1
+"optimizer" = "adamw"
+"lr" = 0.003
+"weight_decay" = 0.01
+"grad_clip" = 1.0
+"scheduler" = "cosine"
+"warmup_steps" = 5
+"eval_every" = 20
+"eval_steps" = 8
+"gradient_checkpointing" = false
+"use_compile" = false
+"use_8bit_optimizer" = false
+"save_best_only" = false
+"z_loss_weight" = 0.0
+
+["evaluation"]
+"prompts" = ["Ada finds", "Ben carries a", "Lina shares"]
+"max_new_tokens" = 24
+"temperature" = 0.8
+"top_p" = 0.9
+
+["export"]
+"enabled" = false
+"model_name" = "LLM-Lab residual-connections exercise"
+"description" = "Editable dense decoder with residual additions; paired with the same learned layers after removing these additions."
+"license" = "mit"

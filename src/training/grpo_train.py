@@ -304,12 +304,33 @@ def grpo_update(
 
     GRPO optimizes the policy to increase the probability of responses
     with higher advantages (relative to the group).
+
+    Opt-in variants (controlled by config):
+    - config.grpo_clip_higher (DAPO "clip-higher"): PPO-style clipped surrogate with
+      asymmetric bounds [1 - clip_range, 1 + grpo_clip_higher].
+    - config.grpo_importance_level == "sequence" (GSPO): the importance ratio is
+      computed at sequence level as exp(mean_t(logp_new - logp_old)) — a
+      length-normalized geometric mean — and applied uniformly to the sequence.
+    With defaults (clip_higher=None, importance_level="token") the legacy
+    unclipped GRPO loss -(mean_logp * advantage) is used, unchanged.
     """
     model.train()
 
     total_policy_loss = 0
     total_entropy = 0
     n_updates = 0
+
+    # Importance-ratio surrogate is used when either DAPO clip-higher or
+    # GSPO sequence-level ratios are requested.
+    use_ratio = (
+        getattr(config, 'grpo_clip_higher', None) is not None
+        or getattr(config, 'grpo_importance_level', 'token') == 'sequence'
+    )
+    clip_low = 1.0 - config.clip_range
+    clip_high = 1.0 + (
+        config.grpo_clip_higher if getattr(config, 'grpo_clip_higher', None) is not None
+        else config.clip_range
+    )
 
     # Get mini-batch size
     mini_batch_size = config.mini_batch_size
@@ -332,6 +353,7 @@ def grpo_update(
             batch_log_probs = []
             batch_advantages = []
             batch_entropies = []
+            batch_surrogate_losses = []  # Used only when use_ratio is True
 
             for prompt, responses, old_log_probs_group, advantages in zip(
                 mini_prompts, mini_response_groups, mini_old_log_prob_groups, mini_advantage_groups
@@ -399,6 +421,44 @@ def grpo_update(
                     batch_advantages.append(advantage)
                     batch_entropies.append(entropy)
 
+                    # Importance-ratio surrogate (DAPO clip-higher / GSPO)
+                    if use_ratio:
+                        new_token_lp = token_log_probs.squeeze(0)  # [resp_len]
+                        # Align with old (behavior policy) log probs from generation.
+                        # Re-tokenization of the decoded response can shift lengths,
+                        # so only the overlapping prefix is used.
+                        n_overlap = min(len(old_log_probs), new_token_lp.size(0))
+                        if n_overlap > 0:
+                            old_lp = torch.tensor(
+                                old_log_probs[:n_overlap],
+                                device=new_token_lp.device,
+                                dtype=new_token_lp.dtype,
+                            )
+                            new_lp = new_token_lp[:n_overlap]
+                            adv = advantage.detach()
+                            if getattr(config, 'grpo_importance_level', 'token') == 'sequence':
+                                # GSPO: sequence-level ratio = length-normalized
+                                # geometric mean of per-token ratios, applied
+                                # uniformly to the whole sequence before clipping.
+                                ratio = torch.exp((new_lp - old_lp).mean())
+                                surrogate = torch.min(
+                                    ratio * adv,
+                                    torch.clamp(ratio, clip_low, clip_high) * adv,
+                                )
+                                batch_surrogate_losses.append(-surrogate)
+                            else:
+                                # Token-level ratio with (possibly asymmetric) clipping
+                                ratio = torch.exp(new_lp - old_lp)
+                                surrogate = torch.min(
+                                    ratio * adv,
+                                    torch.clamp(ratio, clip_low, clip_high) * adv,
+                                )
+                                batch_surrogate_losses.append(-surrogate.mean())
+                        else:
+                            # No old log probs available: fall back to the
+                            # legacy policy-gradient term for this response.
+                            batch_surrogate_losses.append(-(mean_log_prob * advantage.detach()))
+
                     # Free intermediate tensors
                     del input_ids, logits, response_logits, log_probs, token_log_probs
 
@@ -410,9 +470,14 @@ def grpo_update(
             advantages_tensor = torch.stack(batch_advantages).to(device)
             entropies = torch.stack(batch_entropies)
 
-            # GRPO loss: maximize log_prob * advantage
-            # This encourages the model to increase probability of high-reward responses
-            policy_loss = -(new_log_probs * advantages_tensor).mean()
+            # GRPO loss
+            if use_ratio and len(batch_surrogate_losses) > 0:
+                # Clipped importance-ratio surrogate (DAPO clip-higher / GSPO)
+                policy_loss = torch.stack(batch_surrogate_losses).mean()
+            else:
+                # Legacy GRPO: maximize log_prob * advantage
+                # This encourages the model to increase probability of high-reward responses
+                policy_loss = -(new_log_probs * advantages_tensor).mean()
 
             # Entropy bonus to encourage exploration
             entropy_loss = -entropies.mean()
@@ -576,21 +641,46 @@ def train_grpo(config: RLHFConfig, callback=None):
                 rewards_groups.append(group_rewards)
                 idx += config.group_size
 
-            # Compute group-relative advantages
-            advantage_groups = compute_group_advantages(rewards_groups)
+            # DAPO dynamic sampling: drop groups whose rewards are all identical
+            # (all-correct/all-wrong => zero advantage, no gradient signal).
+            update_prompts = prompts
+            update_response_groups = response_groups
+            update_old_log_prob_groups = old_log_prob_groups
+            update_rewards_groups = rewards_groups
+            skipped_groups = 0
+            if getattr(config, 'grpo_dynamic_sampling', False):
+                keep_indices = [
+                    i for i, r in enumerate(rewards_groups)
+                    if r.numel() > 1 and (r.max() - r.min()).item() > 1e-6
+                ]
+                skipped_groups = len(prompts) - len(keep_indices)
+                if skipped_groups > 0:
+                    print(f"   ⚠️  Dynamic sampling: skipped {skipped_groups}/{len(prompts)} "
+                          f"group(s) with identical rewards (no gradient signal)")
+                update_prompts = [prompts[i] for i in keep_indices]
+                update_response_groups = [response_groups[i] for i in keep_indices]
+                update_old_log_prob_groups = [old_log_prob_groups[i] for i in keep_indices]
+                update_rewards_groups = [rewards_groups[i] for i in keep_indices]
 
-            # Perform GRPO update
-            policy_loss, entropy = grpo_update(
-                policy_model,
-                optimizer,
-                tokenizer,
-                prompts,
-                response_groups,
-                old_log_prob_groups,
-                advantage_groups,
-                config,
-                device
-            )
+            # Compute group-relative advantages
+            advantage_groups = compute_group_advantages(update_rewards_groups)
+
+            # Perform GRPO update (skipped entirely if dynamic sampling removed all groups)
+            if len(update_prompts) > 0:
+                policy_loss, entropy = grpo_update(
+                    policy_model,
+                    optimizer,
+                    tokenizer,
+                    update_prompts,
+                    update_response_groups,
+                    update_old_log_prob_groups,
+                    advantage_groups,
+                    config,
+                    device
+                )
+            else:
+                print("   ⚠️  Dynamic sampling: all groups skipped this step, no update performed")
+                policy_loss, entropy = 0.0, 0.0
 
             # Clear CUDA cache periodically to prevent memory fragmentation
             if step % 10 == 0:

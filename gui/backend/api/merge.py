@@ -12,7 +12,6 @@ sys.path.insert(0, project_root)
 sys.path.insert(0, str(Path(project_root) / 'src'))
 
 from model.model import TransformerLLM
-from model.mamba2_model import Mamba2LLM
 from model.lora_utils import apply_lora_to_model
 
 router = APIRouter()
@@ -145,12 +144,9 @@ async def merge_lora(request: MergeRequest):
 
             model_config = checkpoint['model_config']
 
-            # Create base model (support both architectures)
+            # Create base model
             print("Creating base model...")
-            if model_config.model_architecture == "mamba2":
-                base_model = Mamba2LLM(model_config)
-            else:
-                base_model = TransformerLLM(model_config)
+            base_model = TransformerLLM(model_config)
 
             base_model.load_state_dict(checkpoint['model_state_dict'])
 
@@ -215,10 +211,7 @@ async def merge_lora(request: MergeRequest):
 
             # Create base model
             print("Creating base model...")
-            if model_config.model_architecture == "mamba2":
-                base_model = Mamba2LLM(model_config)
-            else:
-                base_model = TransformerLLM(model_config)
+            base_model = TransformerLLM(model_config)
 
             # Try to find LoRA config in checkpoint
             lora_config_dict = None

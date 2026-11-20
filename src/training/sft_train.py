@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from config import ModelConfig, SFTConfig
 from model.factory import build_model
+from model.bricks import MoEFFN
 from data import load_tokenizer, create_sft_dataset, sft_collate_fn
 from optimizers import setup_optimizer
 from training.report import TrainingReport
@@ -244,6 +245,11 @@ def train_sft(config: SFTConfig, callback=None):
         split="train"
     )
     print(f"   ✓ Training dataset created in {time.time() - ds_start:.1f}s", flush=True)
+    if getattr(train_dataset, 'use_chat_template', False):
+        print("   ✓ Formatting: tokenizer chat template (assistant-token loss masking)", flush=True)
+        print("     (legacy User:/Assistant: markers remain as per-item fallback)", flush=True)
+    else:
+        print("   ✓ Formatting: legacy text markers (User:/Assistant:)", flush=True)
 
     # For validation, try to use a validation split if available
     # Try common validation split names: validation, val, test
@@ -550,16 +556,14 @@ def train_sft(config: SFTConfig, callback=None):
             continue
 
         # Forward pass with bfloat16
-        # Gradient checkpointing: only for transformers, not for Mamba2
-        # Mamba2's sequential scan + checkpointing recomputation uses more memory
-        use_checkpoint = (model_config.model_architecture == "transformer")
         with autocast(device_type="cuda", dtype=torch.bfloat16):
-            out, aux_loss = model(x, use_checkpoint=use_checkpoint, return_hidden=use_maxis)
+            out, aux_loss = model(x, use_checkpoint=True, return_hidden=use_maxis)
             if use_maxis:
-                # Mask out -100 targets; MAXIS has no ignore_index so we filter manually
+                # Mask out -100 targets; MAXIS has no ignore_index so we filter manually.
+                # The collate_fn already shifted targets, so out[i] aligns with y[i].
                 valid_mask = (y.view(-1) != -100)
                 loss = maxis_loss_fn(
-                    out[:, :-1].reshape(-1, model_config.d_model)[valid_mask],
+                    out.reshape(-1, model_config.d_model)[valid_mask],
                     y.view(-1)[valid_mask],
                 )
             else:
@@ -619,6 +623,11 @@ def train_sft(config: SFTConfig, callback=None):
             for optimizer in optimizers:
                 optimizer.step()
                 optimizer.zero_grad()
+
+                # MoE aux-loss-free balancing: apply per optimizer step
+                for _m in model.modules():
+                    if isinstance(_m, MoEFFN):
+                        _m.apply_bias_update()
 
         # Step scheduler every iteration (not just after gradient accumulation)
         for scheduler in schedulers:

@@ -11,5 +11,24 @@ outputs/*
 gui/backend/cache/*
 gui/backend/checkpoints/*
 *.json
+# Frontend tooling JSON files must stay tracked despite the blanket *.json rule
+!gui/frontend/package.json
+!gui/frontend/package-lock.json
+!gui/frontend/tsconfig.json
+!gui/frontend/tsconfig.node.json
 data/*
 temp
+
+# Local Python environments and generated frontend output
+.venv/
+venv/
+gui/frontend/dist/
+# Required workshop metadata despite the blanket JSON rule
+!gui/frontend/src/content/modern-bricks.json
+
+# Local release artifacts and private working records.
+/dist/
+docs/release-evidence/
+docs/roadmap-1.0.md
+docs/release-validation.md
+docs/assets/reference-learning.png

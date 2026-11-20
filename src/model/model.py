@@ -27,9 +27,14 @@ class TransformerBlock(nn.Module):
         # Get norm class
         NormClass = NORM_TYPES[config.norm_type]
 
-        # Attention
-        AttentionClass = ATTENTION_TYPES[config.attention_type]
-        self.attention = AttentionClass(config)
+        # Token mixer: attention, or Gated DeltaNet on hybrid linear layers
+        self.is_linear = hasattr(config, 'is_linear_layer') and config.is_linear_layer(layer_idx)
+        if self.is_linear:
+            from .gdn import GatedDeltaNet
+            self.attention = GatedDeltaNet(config)
+        else:
+            AttentionClass = ATTENTION_TYPES[config.attention_type]
+            self.attention = AttentionClass(config)
 
         # Feed-forward: Check if this layer should use MoE
         use_moe_this_layer = config.use_moe and (
@@ -59,9 +64,9 @@ class TransformerBlock(nn.Module):
         # Dropout
         self.dropout = nn.Dropout(config.dropout)
 
-    def forward(self, x, past_key_values=None, start_pos=0):
+    def forward(self, x, past_key_values=None, start_pos=0, doc_ids=None):
         # Pre-norm architecture
-        attn_out, new_kv = self.attention(self.norm1(x), past_key_values=past_key_values, start_pos=start_pos)
+        attn_out, new_kv = self.attention(self.norm1(x), past_key_values=past_key_values, start_pos=start_pos, doc_ids=doc_ids)
         x = x + self.dropout(attn_out)
 
         # Feed-forward (handle MoE aux loss)
@@ -127,7 +132,8 @@ class TransformerLLM(nn.Module):
         """Setup positional encoding for attention layers"""
         if self.config.positional_encoding == 'rope':
             PosClass = POSITIONAL_ENCODINGS['rope']
-            pos_enc = PosClass(self.config.d_k, self.config.max_seq_len)
+            pos_enc = PosClass(self.config.d_k, self.config.max_seq_len,
+                               fraction=getattr(self.config, 'rope_fraction', 0.5))
         elif self.config.positional_encoding == 'yarn':
             PosClass = POSITIONAL_ENCODINGS['yarn']
             pos_enc = PosClass(self.config.d_k, self.config.max_seq_len)
@@ -137,8 +143,14 @@ class TransformerLLM(nn.Module):
         else:
             return
 
-        # Assign to all attention layers
-        for block in self.transformer_blocks:
+        # Assign to attention layers — NoPE layers (every nope_every-th) skip it,
+        # relying on causal masking alone (Llama 4 / SmolLM3 iRoPE style)
+        nope_every = getattr(self.config, 'nope_every', None)
+        for i, block in enumerate(self.transformer_blocks):
+            if getattr(block, 'is_linear', False):
+                continue  # Gated DeltaNet layers have no positional encoding
+            if nope_every and (i + 1) % nope_every == 0:
+                continue
             block.attention.pos_encoding = pos_enc
 
     def _init_weights(self, module):
@@ -152,7 +164,8 @@ class TransformerLLM(nn.Module):
 
     def forward(self, x=None, input_ids=None, use_checkpoint: bool = False,
                 past_key_values=None, use_cache: bool = False,
-                return_hidden: bool = False, **kwargs):
+                return_hidden: bool = False, doc_ids=None,
+                cache_position=None, **kwargs):
         """
         Forward pass
         Args:
@@ -193,16 +206,28 @@ class TransformerLLM(nn.Module):
 
         for i, block in enumerate(self.transformer_blocks):
             layer_past = past_key_values[i] if past_key_values is not None else None
-            start_pos = layer_past[0].size(2) if layer_past is not None else 0
+            # Absolute position for rotary embeddings. Deriving it from the
+            # cache length breaks once sliding-window truncation caps the
+            # cache, so callers doing long generations pass cache_position.
+            if cache_position is not None:
+                start_pos = cache_position if layer_past is not None else 0
+            else:
+                start_pos = layer_past[0].size(2) if layer_past is not None else 0
 
             if use_checkpoint and self.training:
                 # Gradient checkpointing is training-only; never combined with use_cache
-                x, aux_loss, _ = checkpoint(block, x, use_reentrant=False)
+                new_kv = None
+                x, aux_loss, _ = checkpoint(block, x, None, 0, doc_ids, use_reentrant=False)
             else:
-                x, aux_loss, new_kv = block(x, past_key_values=layer_past, start_pos=start_pos)
+                x, aux_loss, new_kv = block(x, past_key_values=layer_past, start_pos=start_pos, doc_ids=doc_ids)
 
             if use_cache:
                 new_past_key_values.append(new_kv)
+
+            # Indexer alignment loss (sparse attention) joins the aux-loss channel
+            idx_loss = getattr(block.attention, 'indexer_loss', None)
+            if idx_loss is not None:
+                aux_loss = idx_loss if aux_loss is None else aux_loss + idx_loss
 
             # Accumulate aux loss from MoE layers
             if aux_loss is not None:
@@ -241,8 +266,9 @@ class TransformerLLM(nn.Module):
         return {"input_ids": input_ids, "past_key_values": past_key_values, "use_cache": True}
 
     def _reorder_cache(self, past_key_values, beam_idx):
-        return [(k.index_select(0, beam_idx), v.index_select(0, beam_idx))
-                for k, v in past_key_values]
+        # Attention layers cache (k, v); Gated DeltaNet layers cache (state,)
+        return [tuple(t.index_select(0, beam_idx) for t in layer_cache)
+                for layer_cache in past_key_values]
 
     def get_input_embeddings(self):
         """Get input embedding layer (PEFT compatibility)"""

@@ -163,69 +163,105 @@ class Sophia(torch.optim.Optimizer):
 # OPTIMIZER SETUP
 # ============================================================================
 
+def param_groups_weight_decay(model: nn.Module, weight_decay: float):
+    """Split parameters into decay / no-decay groups.
+
+    Modern practice (OLMo 2, nanoGPT): no weight decay on embeddings,
+    normalization weights, or biases — only on matmul weights.
+    """
+    no_decay_ids = {id(p) for module in model.modules() if isinstance(module, (nn.Embedding, nn.LayerNorm, nn.RMSNorm)) or getattr(module, '_llmlab_no_weight_decay', False)
+                    for p in module.parameters(recurse=False)}
+    decay, no_decay = [], []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if param.ndim < 2 or id(param) in no_decay_ids:
+            no_decay.append(param)
+        else:
+            decay.append(param)
+    return [
+        {"params": decay, "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    ]
+
+
 def setup_optimizer(model: nn.Module, config):
     """
     Setup optimizer based on config
     Returns list of optimizers (for compatibility with multi-optimizer setups)
     """
     optimizer_name = config.optimizer.lower()
+    on_cuda = next(model.parameters()).is_cuda
+    if getattr(config, 'use_8bit_optimizer', False) and not (HAS_BNB and on_cuda):
+        raise ValueError('use_8bit_optimizer requires bitsandbytes and CUDA')
+    use_bnb = HAS_BNB and on_cuda and getattr(config, 'use_8bit_optimizer', True)
 
     # Handle both 'lr' (TrainingConfig) and 'learning_rate' (SFTConfig/RLHFConfig)
     lr = getattr(config, 'lr', None) or getattr(config, 'learning_rate', 3e-4)
+    wd_groups = param_groups_weight_decay(model, config.weight_decay)
 
     if optimizer_name == "muon":
+        embedding_ids = {id(p) for module in model.modules() if isinstance(module, (nn.Embedding, nn.LayerNorm, nn.RMSNorm)) or getattr(module, '_llmlab_no_weight_decay', False)
+                         for p in module.parameters(recurse=False)}
         # Muon for 2D params, AdamW for rest
         muon_params = []
         adamw_params = []
 
+        adamw_no_decay = []
         for name, param in model.named_parameters():
-            if (param.ndim == 2 and
-                'token_embedding' not in name and
-                'norm' not in name and
-                param.requires_grad):
+            if not param.requires_grad:
+                continue
+            # Muon orthogonalizes matmul weights only — never embeddings
+            # (incl. learned positional embeddings) or norm weights
+            if param.ndim == 2 and id(param) not in embedding_ids:
                 muon_params.append(param)
-            else:
+            elif param.ndim >= 2 and id(param) not in embedding_ids:
                 adamw_params.append(param)
+            else:
+                # embeddings / norms / biases: AdamW without weight decay
+                adamw_no_decay.append(param)
 
         muon_optimizer = Muon(muon_params, lr=lr, momentum=config.muon_momentum, nesterov=config.muon_nesterov)
-        if HAS_BNB:
-            adamw_optimizer = bnb.optim.AdamW8bit(adamw_params, lr=lr * 0.1, weight_decay=config.weight_decay)
+        adamw_decay = adamw_params
+        adamw_groups = [
+            {"params": adamw_decay, "weight_decay": config.weight_decay},
+            {"params": adamw_no_decay, "weight_decay": 0.0},
+        ]
+        if use_bnb:
+            adamw_optimizer = bnb.optim.AdamW8bit(adamw_groups, lr=lr * 0.1)
         else:
-            adamw_optimizer = torch.optim.AdamW(adamw_params, lr=lr * 0.1, weight_decay=config.weight_decay)
+            adamw_optimizer = torch.optim.AdamW(adamw_groups, lr=lr * 0.1)
 
         return [muon_optimizer, adamw_optimizer]
 
     elif optimizer_name == "adamw":
-        if HAS_BNB:
+        if use_bnb:
             optimizer = bnb.optim.AdamW8bit(
-                model.parameters(),
+                wd_groups,
                 lr=lr,
                 betas=(config.adamw_beta1, config.adamw_beta2),
                 eps=config.adamw_eps,
-                weight_decay=config.weight_decay
             )
         else:
-            print("bitsandbytes not installed, using 32-bit AdamW")
+            print("Using 32-bit AdamW")
             optimizer = torch.optim.AdamW(
-                model.parameters(),
+                wd_groups,
                 lr=lr,
                 betas=(config.adamw_beta1, config.adamw_beta2),
                 eps=config.adamw_eps,
-                weight_decay=config.weight_decay
             )
         return [optimizer]
 
     elif optimizer_name == "lion":
-        optimizer = Lion(model.parameters(), lr=lr, betas=(config.lion_beta1, config.lion_beta2), weight_decay=config.weight_decay)
+        optimizer = Lion(wd_groups, lr=lr, betas=(config.lion_beta1, config.lion_beta2))
         return [optimizer]
 
     elif optimizer_name == "sophia":
         optimizer = Sophia(
-            model.parameters(),
+            wd_groups,
             lr=lr,
             betas=(config.sophia_beta1, config.sophia_beta2),
             rho=config.sophia_rho,
-            weight_decay=config.weight_decay
         )
         return [optimizer]
 

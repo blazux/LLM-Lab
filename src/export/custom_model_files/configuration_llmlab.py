@@ -12,11 +12,11 @@ class LLMLabConfig(PretrainedConfig):
     """
     Configuration class for LLM-Lab models.
 
-    Supports both Transformer and Mamba2 architectures with various
-    attention mechanisms (GQA, MHA, MQA, MLA) and activations.
+    Supports transformer architectures with various attention
+    mechanisms (GQA, MHA, MQA, MLA) and activations.
     """
 
-    model_type = "llm-lab"
+    model_type = "llm-lab-transformer"
 
     def __init__(
         self,
@@ -43,6 +43,16 @@ class LLMLabConfig(PretrainedConfig):
         rms_norm_eps: float = None,
         layer_norm_eps: float = None,
 
+        # Modern attention options
+        use_attention_gate: bool = False,
+        nope_every: int = None,
+        rope_fraction: float = 0.5,
+        hybrid_pattern: str = None,
+        use_sparse_attention: bool = False,
+        sparse_top_k: int = 512,
+        sparse_indexer_heads: int = 4,
+        sparse_indexer_dim: int = 32,
+
         # MLA-specific
         d_latent: int = None,
         d_rope_latent: int = None,
@@ -51,14 +61,9 @@ class LLMLabConfig(PretrainedConfig):
         use_moe: bool = False,
         num_experts: int = None,
         num_experts_per_token: int = None,
-
-        # Mamba2-specific
-        state_size: int = 64,
-        expand_factor: int = 2,
-        headdim: int = 64,
-        ngroups: int = 1,
-        chunk_size: int = 256,
-        conv_kernel_size: int = 4,
+        moe_router_type: str = "softmax",
+        moe_aux_free_bias: bool = False,
+        moe_shared_expert: bool = False,
 
         # Other
         tie_word_embeddings: bool = True,
@@ -130,6 +135,16 @@ class LLMLabConfig(PretrainedConfig):
         self.rms_norm_eps = rms_norm_eps
         self.layer_norm_eps = layer_norm_eps
 
+        # Modern attention options
+        self.use_attention_gate = use_attention_gate
+        self.nope_every = nope_every
+        self.rope_fraction = rope_fraction
+        self.hybrid_pattern = hybrid_pattern
+        self.use_sparse_attention = use_sparse_attention
+        self.sparse_top_k = sparse_top_k
+        self.sparse_indexer_heads = sparse_indexer_heads
+        self.sparse_indexer_dim = sparse_indexer_dim
+
         # MLA-specific
         self.d_latent = d_latent
         self.d_rope_latent = d_rope_latent
@@ -138,14 +153,9 @@ class LLMLabConfig(PretrainedConfig):
         self.use_moe = use_moe
         self.num_experts = num_experts
         self.num_experts_per_token = num_experts_per_token
-
-        # Mamba2-specific
-        self.state_size = state_size
-        self.expand_factor = expand_factor
-        self.headdim = headdim
-        self.ngroups = ngroups
-        self.chunk_size = chunk_size
-        self.conv_kernel_size = conv_kernel_size
+        self.moe_router_type = moe_router_type
+        self.moe_aux_free_bias = moe_aux_free_bias
+        self.moe_shared_expert = moe_shared_expert
 
         # Other
         self.dropout = dropout

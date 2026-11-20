@@ -1,6 +1,5 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../../tailwind.config.js";
 
 body {
   margin: 0;
@@ -15,98 +14,39 @@ body {
 
 #root {
   width: 100%;
-  height: 100vh;
+  min-height: 100vh;
 }
 
-/* React Flow custom styles */
-.react-flow__node {
-  border: none;
-  font-size: 12px;
-  transition: all 0.2s ease;
-}
-
-.react-flow__node:hover {
-  transform: scale(1.02);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
-}
-
-.react-flow__handle {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 2px solid #fff;
-  transition: all 0.2s ease;
-}
-
-.react-flow__handle:hover {
-  width: 16px;
-  height: 16px;
-}
-
-.react-flow__edge-path {
-  stroke-width: 2;
-  transition: stroke-width 0.2s ease;
-}
-
-.react-flow__edge:hover .react-flow__edge-path {
-  stroke-width: 3;
+.rf-diagram {
+  height: 100%;
+  width: 100%;
 }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
-
 ::-webkit-scrollbar-track {
   background: #1e293b;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: #475569;
-  border-radius: 4px;
+  background: #334155;
+  border-radius: 3px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: #475569;
 }
 
-/* Custom slider for repeat count */
-input[type="range"].slider-violet {
-  -webkit-appearance: none;
-  appearance: none;
+/* ReactFlow overrides */
+.react-flow__background {
+  background: #0f172a;
 }
-
-input[type="range"].slider-violet::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #a78bfa, #8b5cf6);
-  cursor: pointer;
-  border: 2px solid white;
-  box-shadow: 0 0 10px rgba(167, 139, 250, 0.5);
-  transition: all 0.2s ease;
+.react-flow__controls button {
+  background: #1e293b;
+  border-color: #334155;
+  color: #94a3b8;
 }
-
-input[type="range"].slider-violet::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
-  box-shadow: 0 0 20px rgba(167, 139, 250, 0.8);
-}
-
-input[type="range"].slider-violet::-moz-range-thumb {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #a78bfa, #8b5cf6);
-  cursor: pointer;
-  border: 2px solid white;
-  box-shadow: 0 0 10px rgba(167, 139, 250, 0.5);
-  transition: all 0.2s ease;
-}
-
-input[type="range"].slider-violet::-moz-range-thumb:hover {
-  transform: scale(1.2);
-  box-shadow: 0 0 20px rgba(167, 139, 250, 0.8);
+.react-flow__controls button:hover {
+  background: #334155;
 }

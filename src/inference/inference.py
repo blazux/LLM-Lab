@@ -6,7 +6,7 @@ from model.factory import build_model
 from data import load_tokenizer
 
 
-def load_model_for_inference(checkpoint_path: str):
+def load_model_for_inference(checkpoint_path: str, device: str = None):
     """Load model from checkpoint for inference (supports both base and RLHF models)"""
     # Clean up any existing GPU memory first
     if torch.cuda.is_available():
@@ -37,9 +37,9 @@ def load_model_for_inference(checkpoint_path: str):
     model = build_model(model_config)
     model.load_state_dict(checkpoint['model_state_dict'])
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # Convert to bfloat16 to match training and avoid dtype mismatch with autocast
-    model = model.to(device=device, dtype=torch.bfloat16)
+    device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
+    # Preserve trained master weights; mixed precision is applied at forward time.
+    model = model.to(device=device, dtype=torch.float32)
     model.eval()
 
     # Print model information
@@ -76,7 +76,8 @@ def generate_text(
     generated_tokens = input_ids[0].tolist()
 
     # Prefill: run full prompt through model to populate KV cache
-    with autocast(device_type="cuda", dtype=torch.bfloat16):
+    with autocast(device_type=device.type, dtype=torch.bfloat16,
+                  enabled=device.type == 'cuda' and torch.cuda.is_bf16_supported()):
         logits, _, past_key_values = model(input_ids, use_cache=True)
     # logits: (1, prompt_len, vocab_size) — use last position for first token
     next_token_logits = logits[0, -1, :]
@@ -97,7 +98,7 @@ def generate_text(
         if strategy == "greedy":
             next_token = torch.argmax(scaled_logits, dim=-1, keepdim=True)
         elif strategy == "top_k":
-            top_k_logits, top_k_indices = torch.topk(scaled_logits, top_k)
+            top_k_logits, top_k_indices = torch.topk(scaled_logits, min(top_k, scaled_logits.numel()))
             probs = F.softmax(top_k_logits, dim=-1)
             next_token_idx = torch.multinomial(probs, num_samples=1)
             next_token = top_k_indices[next_token_idx]
@@ -122,8 +123,13 @@ def generate_text(
         if len(generated_tokens) >= max_len:
             break
 
-        with autocast(device_type="cuda", dtype=torch.bfloat16):
-            logits, _, past_key_values = model(next_input, past_key_values=past_key_values, use_cache=True)
+        with autocast(device_type=device.type, dtype=torch.bfloat16,
+                      enabled=device.type == 'cuda' and torch.cuda.is_bf16_supported()):
+            # cache_position: absolute position for RoPE — the cache length
+            # stops being a valid position once sliding-window truncation kicks in
+            logits, _, past_key_values = model(
+                next_input, past_key_values=past_key_values, use_cache=True,
+                cache_position=len(generated_tokens) - 1)
         next_token_logits = logits[0, 0, :]
 
     new_tokens = generated_tokens[prompt_length:]

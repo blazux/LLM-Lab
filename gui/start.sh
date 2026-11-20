@@ -1,51 +1,39 @@
-#!/bin/bash
-
-echo "🚀 Starting LLM Lab GUI..."
-echo ""
-
-# Check if backend dependencies are installed
-if [ ! -d "backend/venv" ]; then
-    echo "📦 Setting up backend virtual environment..."
-    cd backend
-    python -m venv venv
-    source venv/bin/activate
-    pip install -r requirements.txt
-    cd ..
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BACKEND_DIR="$ROOT/gui/backend"
+FRONTEND_DIR="$ROOT/gui/frontend"
+VENV="${LLMLAB_VENV:-$ROOT/.venv}"
+API_PORT="${LLMLAB_API_PORT:-8000}"
+UI_PORT="${LLMLAB_UI_PORT:-5174}"
+API_URL="http://127.0.0.1:$API_PORT"
+PIDS=()
+cleanup() {
+  trap - EXIT INT TERM
+  for pid in "${PIDS[@]}"; do kill -TERM -- "-$pid" 2>/dev/null || true; done
+  for pid in "${PIDS[@]}"; do wait "$pid" 2>/dev/null || true; done
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if curl --max-time 2 -sf "$API_URL/api/health" >/dev/null; then
+  echo "Backend already running: $API_URL"
+else
+  bash "$ROOT/scripts/bootstrap.sh" --venv "$VENV"
+  setsid "$VENV/bin/python" -m uvicorn main:app --app-dir "$BACKEND_DIR" --host 127.0.0.1 --port "$API_PORT" &
+  BACKEND_PID=$!
+  PIDS+=("$BACKEND_PID")
+  READY=false
+  for ((attempt=0; attempt<60; attempt++)); do
+    if ! kill -0 "$BACKEND_PID" 2>/dev/null; then echo 'Backend exited during startup.' >&2; exit 1; fi
+    if curl --max-time 1 -sf "$API_URL/api/health" >/dev/null; then READY=true; break; fi
+    sleep 1
+  done
+  if [[ "$READY" != true ]]; then echo 'Backend did not become ready within 60 seconds.' >&2; exit 1; fi
 fi
-
-# Check if frontend dependencies are installed
-if [ ! -d "frontend/node_modules" ]; then
-    echo "📦 Installing frontend dependencies..."
-    cd frontend
-    npm install
-    cd ..
-fi
-
-echo ""
-echo "✨ Starting servers..."
-echo ""
-echo "Backend API will be available at: http://localhost:8000"
-echo "Frontend GUI will be available at: http://localhost:5173"
-echo ""
-echo "Press Ctrl+C to stop all servers"
-echo ""
-
-# Start backend in background
-cd backend
-source venv/bin/activate
-python main.py &
-BACKEND_PID=$!
-cd ..
-
-# Give backend a moment to start
-sleep 2
-
-# Start frontend
-cd frontend
-npm run dev &
-FRONTEND_PID=$!
-cd ..
-
-# Wait for user to press Ctrl+C
-trap "kill $BACKEND_PID $FRONTEND_PID; exit" INT
-wait
+(cd "$FRONTEND_DIR" && npm ci)
+setsid env VITE_API_TARGET="$API_URL" npm --prefix "$FRONTEND_DIR" run dev -- --host 127.0.0.1 --port "$UI_PORT" --strictPort &
+PIDS+=("$!")
+echo "API: $API_URL | GUI: http://127.0.0.1:$UI_PORT"
+echo 'Press Ctrl+C to stop the servers started by this command.'
+wait -n "${PIDS[@]}"

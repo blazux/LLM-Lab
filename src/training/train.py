@@ -2,21 +2,30 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from torch.amp import autocast, GradScaler
+from torch.amp import autocast
+from contextlib import nullcontext
+from dataclasses import fields, replace
 import math
 import time
 import os
 import logging
 from tqdm import tqdm
+from config import ModelConfig, TrainingConfig
+from model.factory import build_model
+from model.bricks import MoEFFN
+from optimizers import setup_optimizer
+from data import validate_dataset_separation, StreamingTokenDataset, lm_collate_fn, lm_collate_fn_docs, load_tokenizer, create_token_stream
+from training.report import TrainingReport
+from training.maxis_loss import MAXISLoss
 
 logger = logging.getLogger(__name__)
 
-from config import ModelConfig, TrainingConfig
-from model.factory import build_model
-from optimizers import setup_optimizer
-from data import StreamingTokenDataset, lm_collate_fn, load_tokenizer, create_token_stream
-from training.report import TrainingReport
-from training.maxis_loss import MAXISLoss
+
+def precision_context(device):
+    """Use mixed precision on supported GPUs, float32 on CPU/older GPUs."""
+    if device.type == "cuda" and torch.cuda.is_bf16_supported():
+        return autocast(device_type="cuda", dtype=torch.bfloat16)
+    return nullcontext()
 
 
 class AdaptiveLRScheduler:
@@ -260,45 +269,66 @@ def get_trend_indicator(current, previous):
         return "↓"
 
 
+METRIC_DEFINITION = 'language_cross_entropy_v2'
+
+
+def language_perplexity(loss):
+    """Exact exp(mean token NLL); unrepresentable values are unavailable, not capped."""
+    if loss is None or not math.isfinite(loss):
+        return None
+    try:
+        return math.exp(loss)
+    except OverflowError:
+        return None
+
+
+def format_perplexity(value, digits=1):
+    return 'n/a' if value is None else f'{value:.{digits}f}'
+
+
 def evaluate_model(model: nn.Module, val_loader: DataLoader, config: TrainingConfig, vocab_size: int):
-    """Evaluate model on validation set"""
+    """Separate token-weighted language CE from auxiliary optimization objectives."""
+    was_training = model.training
     model.eval()
-    total_loss = 0
-    total_tokens = 0
-    total_correct = 0
+    try:
+        total_language = total_auxiliary = total_tokens = total_correct = 0
+        device = next(model.parameters()).device
+        with torch.no_grad():
+            for i, batch in enumerate(val_loader):
+                if i >= config.eval_steps:
+                    break
+                x, y, doc_ids = batch if len(batch) == 3 else (*batch, None)
+                x, y = x.to(device), y.to(device)
+                if doc_ids is not None:
+                    doc_ids = doc_ids.to(device)
+                with precision_context(device):
+                    logits, aux_loss = model(x, doc_ids=doc_ids)
+                    ce = F.cross_entropy(logits.float().reshape(-1, vocab_size), y.reshape(-1))
+                    auxiliary = aux_loss if aux_loss is not None else ce.new_zeros(())
+                    if config.z_loss_weight:
+                        auxiliary = auxiliary + config.z_loss_weight * torch.logsumexp(logits.float(), dim=-1).square().mean()
+                total_language += ce.item() * y.numel()
+                total_auxiliary += auxiliary.item() * y.numel()
+                total_tokens += y.numel()
+                total_correct += (logits.argmax(dim=-1) == y).sum().item()
+        if total_tokens == 0:
+            raise ValueError('Validation stream is empty; provide more tokens or a separate validation dataset.')
+        ce = total_language / total_tokens
+        aux = total_auxiliary / total_tokens
+        return {'val_loss': ce, 'val_language_loss': ce, 'val_auxiliary_loss': aux,
+                'val_objective_loss': ce + aux, 'val_accuracy': total_correct / total_tokens,
+                'val_perplexity': language_perplexity(ce), 'metric_definition': METRIC_DEFINITION}
+    finally:
+        model.train(was_training)
 
-    device = next(model.parameters()).device
 
-    with torch.no_grad():
-        for i, (x, y) in enumerate(val_loader):
-            if i >= config.eval_steps:
-                break
+def unwrap_compiled(model):
+    """Return the underlying module of a torch.compile-wrapped model.
 
-            x, y = x.to(device), y.to(device)
-
-            with autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits, aux_loss = model(x)
-                loss = F.cross_entropy(logits.view(-1, vocab_size), y.view(-1))
-                # Add MoE auxiliary loss if present
-                if aux_loss is not None:
-                    loss = loss + aux_loss
-
-            total_loss += loss.item() * y.numel()
-            total_tokens += y.numel()
-
-            predictions = logits.argmax(dim=-1)
-            total_correct += (predictions == y).sum().item()
-
-    avg_loss = total_loss / total_tokens
-    accuracy = total_correct / total_tokens
-    perplexity = math.exp(min(avg_loss, 20))
-
-    model.train()
-    return {
-        'val_loss': avg_loss,
-        'val_accuracy': accuracy,
-        'val_perplexity': perplexity
-    }
+    Keeps checkpoint state_dict keys free of the '_orig_mod.' prefix so
+    checkpoints stay loadable regardless of the use_compile setting.
+    """
+    return getattr(model, '_orig_mod', model)
 
 
 def setup_schedulers(optimizers: list, config: TrainingConfig, start_step: int = 0):
@@ -318,7 +348,7 @@ def setup_schedulers(optimizers: list, config: TrainingConfig, start_step: int =
             scheduler = AdaptiveLRScheduler(
                 optimizer=optimizer,
                 base_lr=config.lr,
-                warmup_steps=config.warmup_steps,
+                warmup_steps=min(config.warmup_steps, max(0, config.max_steps - start_step - 1)),
                 window_size=config.adaptive_window,
                 increase_factor=config.adaptive_increase_factor,
                 decrease_factor=config.adaptive_decrease_factor,
@@ -330,52 +360,54 @@ def setup_schedulers(optimizers: list, config: TrainingConfig, start_step: int =
             if start_step > 0:
                 scheduler.last_epoch = start_step - 1
 
-        elif config.scheduler == "cosine":
-            def lr_lambda(step):
-                # Adjust step to be relative to start_step
-                relative_step = step - start_step
+        else:
+            if config.scheduler not in {"wsd", "cosine", "linear", "polynomial", "constant"}:
+                raise ValueError(f"Unknown scheduler: {config.scheduler}")
 
-                if relative_step < config.warmup_steps:
-                    return relative_step / config.warmup_steps
-                else:
-                    # Total steps from start_step to max_steps
-                    total_steps = config.max_steps - start_step
-                    progress = (relative_step - config.warmup_steps) / (total_steps - config.warmup_steps)
+            def lr_lambda(step):
+                relative_step = max(0, step - start_step)
+                total_steps = max(1, config.max_steps - start_step)
+                # Always leave at least one update after warmup on short runs.
+                warmup = min(config.warmup_steps, total_steps - 1)
+                if config.scheduler == "constant":
+                    return 1.0
+                if config.scheduler == "wsd":
+                    decay_steps = max(1, int(total_steps * config.wsd_decay_fraction))
+                    decay_start = total_steps - decay_steps
+                    warmup = min(warmup, decay_start)
+                    if relative_step < warmup:
+                        return relative_step / max(1, warmup)
+                    if relative_step < decay_start:
+                        return 1.0
+                    return max(0.0, (total_steps - relative_step) / decay_steps)
+                if relative_step < warmup:
+                    return relative_step / max(1, warmup)
+                progress = min(1.0, (relative_step - warmup) / max(1, total_steps - warmup))
+                if config.scheduler == "cosine":
                     return 0.5 * (1 + math.cos(math.pi * progress))
-
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=start_step - 1)
-
-        elif config.scheduler == "linear":
-            def lr_lambda(step):
-                relative_step = step - start_step
-                total_steps = config.max_steps - start_step
-
-                if relative_step < config.warmup_steps:
-                    return relative_step / config.warmup_steps
-                else:
-                    return max(0.0, (total_steps - relative_step) / (total_steps - config.warmup_steps))
-
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=start_step - 1)
-
-        elif config.scheduler == "polynomial":
-            def lr_lambda(step):
-                relative_step = step - start_step
-                total_steps = config.max_steps - start_step
-
-                if relative_step < config.warmup_steps:
-                    return relative_step / config.warmup_steps
-                else:
-                    progress = (relative_step - config.warmup_steps) / (total_steps - config.warmup_steps)
+                if config.scheduler == "polynomial":
                     return (1 - progress) ** 2
+                return 1 - progress
 
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=start_step - 1)
-
-        else:  # constant
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: 1.0, last_epoch=start_step - 1)
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=-1)
 
         schedulers.append(scheduler)
 
     return schedulers
+
+
+def extends_single_source(previous, updated):
+    """Allow an explicit extension to expose more rows of one unchanged source.
+
+    Mixture exhaustion changes interleave order, so mixtures remain immutable.
+    All identity/order settings, including revision and skip, must match exactly.
+    """
+    if not isinstance(previous, list) or not isinstance(updated, list) or len(previous) != 1 or len(updated) != 1:
+        return False
+    old, new = dict(previous[0]), dict(updated[0])
+    old_take, new_take = old.pop('take', None), new.pop('take', None)
+    return (old == new and type(old_take) is int and old_take > 0
+            and (new_take is None or (type(new_take) is int and new_take > old_take)))
 
 
 def train_model(
@@ -385,7 +417,8 @@ def train_model(
     output_dir: str = "/app/data",
     additional_steps: int = 0,
     load_optimizer_state: bool = True,
-    callback: callable = None
+    callback: callable = None,
+    device: str = None,
 ):
     """Main training function
 
@@ -395,15 +428,48 @@ def train_model(
         checkpoint_path: Path to checkpoint to resume from
         output_dir: Directory to save checkpoints
         additional_steps: Additional steps to train beyond checkpoint (0 = use config max_steps)
-        load_optimizer_state: Whether to load optimizer/scheduler state from checkpoint (set False when switching optimizers)
+        load_optimizer_state: Resume the run's counters, data cursor, optimizer,
+            scheduler and RNG. False starts a new run from checkpoint weights.
         callback: Optional callback object with on_step(step, loss, lr, ppl) and on_log(message, level) methods
     """
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # Save configuration files for reproducibility
-    model_config.save(f"{output_dir}/model_config.json")
-    train_config.save(f"{output_dir}/training_config.json")
+    if checkpoint_path and not os.path.isfile(checkpoint_path):
+        raise FileNotFoundError(checkpoint_path)
+    if additional_steps < 0:
+        raise ValueError("additional_steps must be non-negative")
+
+    checkpoint = None
+    if checkpoint_path:
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        if checkpoint.get('checkpoint_version') != 2 and load_optimizer_state:
+            raise ValueError(
+                "Legacy checkpoint uses ambiguous batch-step counters. "
+                "Use load_optimizer_state=False to start a new run from its weights."
+            )
+        if load_optimizer_state:
+            saved_config = checkpoint['train_config']
+            # Changing the recipe while loading old optimizer/scheduler state can
+            # silently invalidate a resume. An explicit extension may only raise
+            # a single source's document cap while keeping its prefix unchanged.
+            for name in (field.name for field in fields(train_config)
+                         if field.name not in {'max_steps', 'model_config_path', 'save_best_only', 'use_compile'}):
+                if getattr(saved_config, name) != getattr(train_config, name):
+                    if (name == 'datasets' and additional_steps > 0
+                            and extends_single_source(saved_config.datasets, train_config.datasets)):
+                        continue
+                    raise ValueError(f"Cannot resume with changed {name}; use load_optimizer_state=False for a new run.")
+            if not additional_steps and saved_config.max_steps != train_config.max_steps:
+                raise ValueError("Use additional_steps to extend training beyond the saved max_steps.")
+        # The saved architecture is authoritative, including tokenizer and vocabulary.
+        if getattr(model_config, 'assembly', None) is not None:
+            from model.assembly_runtime import assembly_signature
+            saved_model_config = checkpoint['model_config']
+            if (getattr(saved_model_config, 'assembly', None) is None
+                    or assembly_signature(model_config) != assembly_signature(saved_model_config)):
+                raise ValueError('The assembly has changed since this checkpoint. Start a new model or restore the saved graph before resuming.')
+        model_config = checkpoint['model_config']
 
     # Load tokenizer and create data streams
     print("\n📚 Loading tokenizer and datasets...")
@@ -412,33 +478,48 @@ def train_model(
     tokenizer = load_tokenizer(model_config.tokenizer_name)
 
     # Validate vocab_size matches tokenizer
-    if model_config.vocab_size != tokenizer.vocab_size:
-        print(f"   ⚠️  WARNING: model_config.vocab_size ({model_config.vocab_size}) != tokenizer.vocab_size ({tokenizer.vocab_size})")
-        print(f"   Automatically updating to {tokenizer.vocab_size} to match tokenizer")
+    tokenizer_size = len(tokenizer)  # Includes added tokens, unlike vocab_size.
+    if model_config.vocab_size != tokenizer_size:
+        print(f"   ⚠️  WARNING: model_config.vocab_size ({model_config.vocab_size}) != tokenizer.vocab_size ({tokenizer_size})")
+        print(f"   Automatically updating to {tokenizer_size} to match tokenizer")
 
-    model_config.vocab_size = tokenizer.vocab_size
+    if checkpoint and model_config.vocab_size != tokenizer_size:
+        raise ValueError("Checkpoint vocabulary does not match the tokenizer, including added tokens.")
+    model_config.vocab_size = tokenizer_size
 
     # Create token stream
+    validate_dataset_separation(train_config.datasets, train_config.validation_datasets)
     token_stream_fn = create_token_stream(train_config.datasets, tokenizer)
+    separate_validation = train_config.validation_datasets is not None
+    val_stream_fn = create_token_stream(train_config.validation_datasets, tokenizer) if separate_validation else token_stream_fn
 
     # Initialize model
     print(f"\n🔧 Building {model_config.model_architecture} model...")
     if callback and hasattr(callback, 'on_log'):
         callback.on_log(f"Building {model_config.model_architecture} model...", "info")
     model = build_model(model_config)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
 
-    # Cast model to bfloat16 for memory efficiency (reduces memory usage by 50%)
-    model = model.to(device=device, dtype=torch.bfloat16)
+    # Keep master weights and AdamW moments in float32. Autocast handles bf16
+    # compute without rounding small optimizer updates away in bf16 parameters.
+    model = model.to(device=device, dtype=torch.float32)
+
+    # Optional torch.compile (first step is slow while kernels compile, then faster)
+    if getattr(train_config, 'use_compile', False):
+        print("   Compiling model with torch.compile...")
+        model = torch.compile(model)
+
 
     total_params = model.count_parameters()
     print(f"   Total parameters: {total_params:,}")
+    print(f"   Device: {device}")
     print(f"   Model dtype: {next(model.parameters()).dtype}")
     if callback and hasattr(callback, 'on_log'):
         callback.on_log(f"Model initialized: {total_params:,} parameters", "info")
 
     # Setup optimizers
     optimizers = setup_optimizer(model, train_config)
+    initial_lrs = [[group['lr'] for group in opt.param_groups] for opt in optimizers]
 
     # Note: GradScaler is NOT used with bfloat16 (only needed for float16)
     # BFloat16 has same exponent range as float32, so no gradient scaling needed
@@ -448,17 +529,22 @@ def train_model(
     total_tokens_seen = 0
     best_val_loss = float('inf')
     target_steps = train_config.max_steps
+    data_tokens_seen = 0
+    schedule_start_step = 0
 
     if checkpoint_path and os.path.exists(checkpoint_path):
         print(f"\n🔄 Loading checkpoint from {checkpoint_path}...")
-        # Load directly to device so weights go straight into VRAM (no CPU RAM staging)
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        unwrap_compiled(model).load_state_dict(checkpoint['model_state_dict'])
 
-        model.load_state_dict(checkpoint['model_state_dict'])
-
-        start_step = checkpoint.get('step', 0)
-        total_tokens_seen = checkpoint.get('total_tokens_seen', 0)
-        best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+        if load_optimizer_state:
+            start_step = checkpoint.get('step', 0)
+            total_tokens_seen = checkpoint.get('total_tokens_seen', 0)
+            data_tokens_seen = checkpoint.get('data_tokens_seen', total_tokens_seen)
+            best_val_loss = (checkpoint.get('best_val_loss', float('inf'))
+                             if checkpoint.get('metric_definition') == METRIC_DEFINITION else float('inf'))
+            schedule_start_step = checkpoint.get('schedule_start_step', 0)
+            if checkpoint.get('metric_definition') != METRIC_DEFINITION:
+                print('   Legacy metrics: resetting best validation loss for language cross-entropy.')
 
         print(f"   Resumed from step {start_step}, val_loss={best_val_loss:.4f}")
 
@@ -470,7 +556,6 @@ def train_model(
         else:
             print("   Skipped loading optimizer state (starting fresh)")
 
-        del checkpoint
 
         # Handle extended training
         if additional_steps > 0:
@@ -485,87 +570,72 @@ def train_model(
             remaining = target_steps - start_step
             print(f"   Training {remaining} remaining steps (to step {target_steps})")
 
-    # Setup schedulers AFTER determining start_step
-    # Two scenarios:
-    # 1. Resume interrupted training (load_optimizer_state=True): Schedule over ENTIRE range (0→max_steps)
-    # 2. Extend completed training (load_optimizer_state=False): Schedule over NEW range (current→target)
+    train_config = replace(train_config, max_steps=target_steps)
 
-    if load_optimizer_state and checkpoint_path:
-        # Scenario 1: Resume interrupted training
-        # - Create scheduler for the FULL range (step 0 → max_steps)
-        # - Manually set last_epoch to resume point (NOT load state - causes LR mismatch)
-        print(f"\n🔧 Setting up learning rate schedulers (continuing original schedule 0→{train_config.max_steps})...")
-
-        # Set initial_lr before creating scheduler
-        for optimizer in optimizers:
-            for group in optimizer.param_groups:
-                group.setdefault('initial_lr', train_config.lr)
-
-        # Create fresh scheduler with compatible lambda functions
-        schedulers = setup_schedulers(optimizers, train_config, start_step=0)
-
-        # Manually set last_epoch to resume point and update LR
-        # Set to start_step so that the first scheduler.step() call will compute LR for start_step + 1
-        for scheduler in schedulers:
-            scheduler.last_epoch = start_step
-            # Recompute LR based on current step (skip for AdaptiveLRScheduler which handles its own LR)
-            if hasattr(scheduler, 'lr_lambdas'):
-                for param_group, lr_lambda in zip(scheduler.optimizer.param_groups, scheduler.lr_lambdas):
-                    param_group['lr'] = param_group['initial_lr'] * lr_lambda(start_step)
-            elif isinstance(scheduler, AdaptiveLRScheduler):
-                scheduler.step(start_step)
-
-        print(f"   Scheduler resuming at step {start_step} (LR={optimizers[0].param_groups[0]['lr']:.2e})")
+    # Resume the saved schedule; an extension starts a new warmup/decay phase.
+    extending = additional_steps > 0 or not load_optimizer_state
+    if extending:
+        schedule_start_step = start_step
+    schedule_end = target_steps if extending or checkpoint is None else checkpoint.get('schedule_end_step', target_steps)
+    schedule_config = replace(train_config, max_steps=schedule_end)
+    for optimizer, lrs in zip(optimizers, initial_lrs):
+        for group, lr in zip(optimizer.param_groups, lrs):
+            if extending:
+                group['initial_lr'] = lr
+            else:
+                group.setdefault('initial_lr', lr)
+    schedulers = setup_schedulers(optimizers, schedule_config, start_step=schedule_start_step)
+    if checkpoint and load_optimizer_state and not extending:
+        for scheduler, state in zip(schedulers, checkpoint['scheduler_states']):
+            scheduler.load_state_dict(state)
+        # LambdaLR construction resets the optimizer LR; restore the saved value.
+        for optimizer, state in zip(optimizers, checkpoint['optimizer_states']):
+            for group, saved in zip(optimizer.param_groups, state['param_groups']):
+                group['lr'] = saved['lr']
     else:
-        # Scenario 2: Extend completed training OR fresh training
-        # - Create scheduler for the NEW range (start_step → target_steps)
-        # - Fresh warmup+decay over additional steps
-        print(f"\n🔧 Setting up learning rate schedulers (new schedule {start_step}→{target_steps})...")
-
-        # Set initial_lr manually when last_epoch > -1
-        for optimizer in optimizers:
-            for group in optimizer.param_groups:
-                group.setdefault('initial_lr', group['lr'])
-
-        schedulers = setup_schedulers(optimizers, train_config, start_step=start_step)
-
-        # Initialize scheduler LR for the first iteration
-        # The scheduler was created with last_epoch = start_step - 1
-        # We need to set it to start_step and compute the initial LR
         for scheduler in schedulers:
             scheduler.last_epoch = start_step
-            # Manually set initial LR for the first iteration (skip for AdaptiveLRScheduler which handles its own LR)
             if hasattr(scheduler, 'lr_lambdas'):
-                for param_group, lr_lambda in zip(scheduler.optimizer.param_groups, scheduler.lr_lambdas):
-                    param_group['lr'] = param_group['initial_lr'] * lr_lambda(start_step)
-            elif isinstance(scheduler, AdaptiveLRScheduler):
-                scheduler.step(start_step)
+                for group, fn in zip(scheduler.optimizer.param_groups, scheduler.lr_lambdas):
+                    group['lr'] = group['initial_lr'] * fn(start_step)
+            else:
+                scheduler.step(0)
 
-        print(f"   Scheduler starting at step {start_step} (LR={optimizers[0].param_groups[0]['lr']:.2e})")
+    model_config.save(f"{output_dir}/model_config.json")
+    train_config.save(f"{output_dir}/training_config.json")
 
     # Create datasets
     print("\n📊 Creating data loaders...")
+    use_doc_masks = getattr(train_config, 'use_doc_masks', False)
+    collate = lm_collate_fn_docs if use_doc_masks else lm_collate_fn
+    if use_doc_masks:
+        print("   Document-boundary attention masks: ON")
+
     train_dataset = StreamingTokenDataset(
         token_stream_fn,
         model_config.max_seq_len,
-        split="train",
-        start_offset=total_tokens_seen
+        split="all" if separate_validation else "train",
+        start_offset=data_tokens_seen,
+        with_doc_ids=use_doc_masks
     )
     val_dataset = StreamingTokenDataset(
-        token_stream_fn,
+        val_stream_fn,
         model_config.max_seq_len,
-        split="val"
+        split="all" if separate_validation else "val",
+        with_doc_ids=use_doc_masks
     )
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=train_config.batch_size,
-        collate_fn=lm_collate_fn
+        collate_fn=collate,
+        generator=torch.Generator().manual_seed(0),
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=train_config.batch_size,
-        collate_fn=lm_collate_fn
+        collate_fn=collate,
+        generator=torch.Generator().manual_seed(0),
     )
 
     # Initialize training report
@@ -591,6 +661,32 @@ def train_model(
     else:
         maxis_loss_fn = None
 
+    def checkpoint_state(**metrics):
+        return {
+            'checkpoint_version': 2,
+            'metric_definition': METRIC_DEFINITION,
+            'model_state_dict': unwrap_compiled(model).state_dict(),
+            'optimizer_states': [opt.state_dict() for opt in optimizers],
+            'scheduler_states': [sch.state_dict() for sch in schedulers],
+            'model_config': model_config,
+            'train_config': train_config,
+            'step': step,
+            'total_tokens_seen': total_tokens_seen,
+            'data_tokens_seen': data_tokens_seen,
+            'best_val_loss': best_val_loss,
+            'schedule_start_step': schedule_start_step,
+            'schedule_end_step': schedule_end,
+            'rng_state': torch.get_rng_state(),
+            'cuda_rng_states': torch.cuda.get_rng_state_all() if device.type == 'cuda' else None,
+            **metrics,
+        }
+
+    if checkpoint and load_optimizer_state:
+        torch.set_rng_state(checkpoint['rng_state'].cpu())
+        if device.type == 'cuda' and checkpoint.get('cuda_rng_states') is not None:
+            torch.cuda.set_rng_state_all([state.cpu() for state in checkpoint['cuda_rng_states']])
+    del checkpoint
+
     # Training loop
     print(f"\n🚀 Starting training from step {start_step}...")
     if callback and hasattr(callback, 'on_log'):
@@ -602,53 +698,74 @@ def train_model(
     model.train()
     step = start_step
     start_time = time.time()
+    checkpoint_tokens_at_start = total_tokens_seen
 
-    # Track previous metrics for trend indicators
-    prev_loss = None
-    prev_acc = None
+    # Track previous evaluation metrics for trend indicators
     prev_val_loss = None
     prev_val_acc = None
 
     pbar = tqdm(total=target_steps, desc="Training", initial=step)
 
+    micro_step = 0
+    accumulated_loss = 0.0
+    language_nll = auxiliary_nll = metric_tokens = 0
+    # Resume only at optimizer boundaries; each saved step is a completed update.
     while step < target_steps:
-        for batch_idx, (x, y) in enumerate(train_loader):
+        batches_read = 0
+        for batch_idx, batch in enumerate(train_loader):
+            batches_read += 1
+            x, y, doc_ids = batch if len(batch) == 3 else (*batch, None)
             if step >= target_steps:
                 break
 
             # Check for stop request
-            if is_stop_requested():
+            if is_stop_requested() and micro_step == 0:
                 print(f"\n⏹️  Stop requested at step {step}. Saving checkpoint...")
                 if callback and hasattr(callback, 'on_log'):
                     callback.on_log(f"Training stopped by user at step {step}", "warning")
                 break
 
             x, y = x.to(device), y.to(device)
+            if doc_ids is not None:
+                doc_ids = doc_ids.to(device)
             tokens_in_batch = x.numel()
             total_tokens_seen += tokens_in_batch
+            data_tokens_seen += tokens_in_batch
 
-            # Forward pass with bfloat16
-            # Gradient checkpointing: only for transformers, not for Mamba2
-            # Mamba2's sequential scan + checkpointing recomputation uses more memory
-            use_checkpoint = (model_config.model_architecture == "transformer")
-            with autocast(device_type="cuda", dtype=torch.bfloat16):
-                out, aux_loss = model(x, use_checkpoint=use_checkpoint, return_hidden=use_maxis)
+            # Mixed precision where supported; otherwise float32.
+            with precision_context(device):
+                out, aux_loss = model(x, use_checkpoint=train_config.gradient_checkpointing,
+                                      return_hidden=use_maxis, doc_ids=doc_ids)
                 if use_maxis:
-                    # out is pre-lm_head hidden states [B, T, d]; targets are [B, T]
-                    loss = maxis_loss_fn(out[:, :-1].reshape(-1, model_config.d_model), y.view(-1))
+                    # out is pre-lm_head hidden states [B, T, d]; the collate_fn
+                    # already shifted targets, so out[i] aligns with y[i]
+                    loss = maxis_loss_fn(out.reshape(-1, model_config.d_model), y.view(-1))
                 else:
-                    loss = F.cross_entropy(out.view(-1, model_config.vocab_size), y.view(-1))
+                    language_loss = F.cross_entropy(out.float().reshape(-1, model_config.vocab_size), y.reshape(-1))
+                    loss = language_loss
+                    # z-loss (PaLM/OLMo2): penalizes softmax-normalizer drift for stability
+                    if train_config.z_loss_weight > 0:
+                        log_z = torch.logsumexp(out.float(), dim=-1)
+                        loss = loss + train_config.z_loss_weight * log_z.pow(2).mean()
                 # Add MoE auxiliary loss if present
                 if aux_loss is not None:
                     loss = loss + aux_loss
+                objective_loss = loss
                 loss = loss / train_config.gradient_accumulation_steps
+
+            if not use_maxis:
+                language_nll += language_loss.detach().item() * tokens_in_batch
+                auxiliary_nll += (objective_loss.detach().item() - language_loss.detach().item()) * tokens_in_batch
+                metric_tokens += tokens_in_batch
 
             # No gradient scaling needed for bfloat16 (unlike float16)
             loss.backward()
+            accumulated_loss += loss.detach().item()
+            micro_step += 1
 
             # Optimizer step after accumulation
-            if (step + 1) % train_config.gradient_accumulation_steps == 0:
-                grad_norm = torch.nn.utils.clip_grad_norm_(
+            if micro_step == train_config.gradient_accumulation_steps:
+                gradient_norm = torch.nn.utils.clip_grad_norm_(
                     model.parameters(),
                     train_config.grad_clip
                 )
@@ -657,15 +774,35 @@ def train_model(
                     optimizer.step()
                     optimizer.zero_grad()
 
-            # Step scheduler every iteration (not just after gradient accumulation)
+                # MoE aux-loss-free balancing: apply the per-expert bias
+                # nudge once per optimizer step (DeepSeek-V3 recipe)
+                for module in model.modules():
+                    if isinstance(module, MoEFFN):
+                        module.apply_bias_update()
+
+            else:
+                continue
+
             for scheduler in schedulers:
                 scheduler.step()
+            step += 1
+            micro_step = 0
+            current_loss = accumulated_loss
+            current_language_loss = language_nll / metric_tokens if metric_tokens else None
+            current_auxiliary_loss = auxiliary_nll / metric_tokens if metric_tokens else None
+            if metric_tokens:
+                current_loss = current_language_loss + current_auxiliary_loss
+            accumulated_loss = 0.0
+            language_nll = auxiliary_nll = metric_tokens = 0
+            pbar.update(1)
+
+            if callback and hasattr(callback, 'on_update'):
+                callback.on_update(step)
 
             # Logging
-            if step % 10 == 0:
+            if step == 1 or step % 10 == 0:
                 with torch.no_grad():
-                    current_loss = loss.item() * train_config.gradient_accumulation_steps
-                    perplexity = math.exp(min(current_loss, 20))
+                    perplexity = language_perplexity(current_language_loss)
                     current_lr = optimizers[0].param_groups[0]['lr']
                     if use_maxis:
                         # Full logits not available with MAXIS — skip token accuracy
@@ -677,7 +814,7 @@ def train_model(
                 pbar.set_postfix({
                     'loss': f'{current_loss:.4f}',
                     'acc': f'{accuracy:.3f}',
-                    'ppl': f'{perplexity:.1f}',
+                    'ppl': format_perplexity(perplexity),
                     'lr': f'{current_lr:.2e}'
                 })
 
@@ -692,7 +829,14 @@ def train_model(
                 )
 
                 # Callback for metrics
-                if callback and hasattr(callback, 'on_step'):
+                if callback and hasattr(callback, 'on_metrics'):
+                    callback.on_metrics(dict(step=step, loss=current_loss, objective_loss=current_loss,
+                        language_loss=current_language_loss, auxiliary_loss=current_auxiliary_loss,
+                        perplexity=perplexity, lr=current_lr, metric_definition=METRIC_DEFINITION,
+                        tokens_seen=total_tokens_seen,
+                        gradient_norm=float(gradient_norm.detach()),
+                        tokens_per_second=(total_tokens_seen - checkpoint_tokens_at_start) / max(time.time() - start_time, 1e-9)))
+                elif callback and hasattr(callback, 'on_step'):
                     callback.on_step(step, current_loss, current_lr, perplexity)
 
             # Evaluation
@@ -710,7 +854,7 @@ def train_model(
                 print(f"\n   Step {step}/{target_steps} | "
                       f"Val Loss {eval_metrics['val_loss']:.4f} {val_loss_trend}{best_marker} | "
                       f"Val Acc {eval_metrics['val_accuracy']:.1%} {val_acc_trend} | "
-                      f"Val PPL {eval_metrics['val_perplexity']:.1f}")
+                      f"Val PPL {format_perplexity(eval_metrics['val_perplexity'])}")
 
                 # Log eval to training report
                 report.log_eval(
@@ -722,10 +866,16 @@ def train_model(
 
                 # Callback for evaluation
                 if callback and hasattr(callback, 'on_log'):
-                    callback.on_log(f"Step {step}: Val Loss={eval_metrics['val_loss']:.4f}, Val PPL={eval_metrics['val_perplexity']:.1f}", "info")
+                    callback.on_log(f"Step {step}: Val Loss={eval_metrics['val_loss']:.4f}, Val PPL={format_perplexity(eval_metrics['val_perplexity'])}", "info")
 
                 # Callback for eval metrics
-                if callback and hasattr(callback, 'on_eval'):
+                if callback and hasattr(callback, 'on_evaluation_metrics'):
+                    callback.on_evaluation_metrics(dict(step=step, eval_loss=eval_metrics['val_loss'],
+                        eval_language_loss=eval_metrics['val_language_loss'],
+                        eval_auxiliary_loss=eval_metrics['val_auxiliary_loss'],
+                        eval_objective_loss=eval_metrics['val_objective_loss'],
+                        eval_perplexity=eval_metrics['val_perplexity'], metric_definition=METRIC_DEFINITION))
+                elif callback and hasattr(callback, 'on_eval'):
                     callback.on_eval(step, eval_metrics['val_loss'], eval_metrics['val_perplexity'])
 
                 # Update previous values
@@ -743,22 +893,13 @@ def train_model(
                                 if callback and hasattr(callback, 'on_log'):
                                     callback.on_log(f"Adaptive LR {adj_info['direction']}: {adj_info['new_lr']:.2e}", "info")
 
-                # Save checkpoint if best
-                if eval_metrics['val_loss'] < best_val_loss:
+                # Build checkpoint from the current state (used for best and/or latest)
+                if is_best:
                     best_val_loss = eval_metrics['val_loss']
 
-                    checkpoint_data = {
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_states': [opt.state_dict() for opt in optimizers],
-                        'scheduler_states': [sch.state_dict() for sch in schedulers],
-                        'model_config': model_config,
-                        'train_config': train_config,
-                        'step': step,
-                        'total_tokens_seen': total_tokens_seen,
-                        'best_val_loss': best_val_loss,
-                        'eval_metrics': eval_metrics
-                    }
+                checkpoint_data = checkpoint_state(eval_metrics=eval_metrics)
 
+                if is_best:
                     torch.save(checkpoint_data, f"{output_dir}/best_model.pt")
 
                     print(f"\n   ✨ New best validation loss: {best_val_loss:.4f}")
@@ -772,12 +913,17 @@ def train_model(
                 if not train_config.save_best_only:
                     torch.save(checkpoint_data, f"{output_dir}/latest_checkpoint.pt")
 
-            step += 1
-            pbar.update(1)
 
         # Check if we broke out due to stop request
-        if is_stop_requested():
+        if is_stop_requested() and micro_step == 0:
             break
+        if step < target_steps:
+            # Start another pass after a finite stream is exhausted. The cursor
+            # in checkpoints is relative to this pass, the token budget is global.
+            if batches_read == 0 and train_dataset.start_offset == 0:
+                raise ValueError("Training stream is empty or too short for one sequence.")
+            train_dataset.start_offset = 0
+            data_tokens_seen = 0
 
     pbar.close()
 
@@ -788,24 +934,26 @@ def train_model(
     final_eval = evaluate_model(model, val_loader, train_config, model_config.vocab_size)
     print(f"   Final Loss: {final_eval['val_loss']:.4f}")
     print(f"   Final Accuracy: {final_eval['val_accuracy']:.4f}")
-    print(f"   Final Perplexity: {final_eval['val_perplexity']:.2f}")
+    print(f"   Final Perplexity: {format_perplexity(final_eval['val_perplexity'], 2)}")
     if callback and hasattr(callback, 'on_log'):
-        callback.on_log(f"Training completed! Final Loss={final_eval['val_loss']:.4f}, PPL={final_eval['val_perplexity']:.2f}", "success")
+        callback.on_log(f"Final validation cross-entropy={final_eval['val_loss']:.4f}, PPL={format_perplexity(final_eval['val_perplexity'], 2)}", "success")
 
-    # Save final model
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'optimizer_states': [opt.state_dict() for opt in optimizers],
-        'scheduler_states': [sch.state_dict() for sch in schedulers],
-        'model_config': model_config,
-        'train_config': train_config,
-        'step': step,
-        'total_tokens_seen': total_tokens_seen,
-        'final_metrics': final_eval
-    }, f"{output_dir}/final_model.pt")
+    if callback and hasattr(callback, 'on_evaluation_metrics'):
+        callback.on_evaluation_metrics(dict(step=step, eval_loss=final_eval['val_loss'],
+            eval_language_loss=final_eval['val_language_loss'], eval_auxiliary_loss=final_eval['val_auxiliary_loss'],
+            eval_objective_loss=final_eval['val_objective_loss'], eval_perplexity=final_eval['val_perplexity'],
+            metric_definition=METRIC_DEFINITION))
+
+    if final_eval['val_loss'] < best_val_loss:
+        best_val_loss = final_eval['val_loss']
+        torch.save(checkpoint_state(eval_metrics=final_eval), f"{output_dir}/best_model.pt")
+
+    # Save at an optimizer boundary so resuming never loses accumulated gradients.
+    torch.save(checkpoint_state(final_metrics=final_eval), f"{output_dir}/final_model.pt")
 
     training_time = time.time() - start_time
-    print(f"\n✅ Training completed in {training_time / 60:.1f} minutes")
+    outcome = 'stopped' if is_stop_requested() and step < target_steps else 'completed'
+    print(f"\n✅ Training {outcome} in {training_time / 60:.1f} minutes")
 
     # Generate training report PDF
     report.finalize(

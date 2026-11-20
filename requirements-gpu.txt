@@ -1,0 +1,3 @@
+# Optional 8-bit optimizer support; not required for standard AdamW or CPU use.
+-r requirements.txt
+bitsandbytes>=0.43.0

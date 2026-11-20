@@ -15,6 +15,8 @@ project_root = str(Path(__file__).parent.parent.parent.parent)
 sys.path.insert(0, project_root)
 sys.path.insert(0, str(Path(project_root) / 'src'))
 
+from run_store import get_run_store
+
 router = APIRouter()
 
 
@@ -230,48 +232,50 @@ async def export_to_hub(request: ExportRequest) -> ExportResponse:
 
 
 @router.get("/checkpoints")
-async def list_checkpoints():
+async def list_checkpoints(run_id: Optional[str] = None):
     """
     List available checkpoints for export.
     """
-    data_dir = Path("/app/data")
     checkpoints = []
 
-    if data_dir.exists():
-        for ckpt_file in data_dir.glob("*.pt"):
-            try:
-                stat = ckpt_file.stat()
-                checkpoint = torch.load(str(ckpt_file), map_location="cpu", weights_only=False)
+    try:
+        files = get_run_store().checkpoint_files(run_id)
+    except KeyError:
+        raise HTTPException(404, 'Run not found')
+    for ckpt_file in files:
+        try:
+            stat = ckpt_file.stat()
+            checkpoint = torch.load(str(ckpt_file), map_location="cpu", weights_only=False)
 
-                # Determine checkpoint type
-                model_config = checkpoint.get('model_config')
+            # Determine checkpoint type
+            model_config = checkpoint.get('model_config')
 
-                info = {
-                    "name": ckpt_file.name,
-                    "path": str(ckpt_file),
-                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                    "modified": stat.st_mtime,
-                    "has_model_config": model_config is not None,
-                }
+            info = {
+                "name": f"{ckpt_file.parent.parent.name if ckpt_file.parent.name == 'checkpoints' else ckpt_file.parent.name} / {ckpt_file.name}",
+                "path": str(ckpt_file),
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "modified": stat.st_mtime,
+                "has_model_config": model_config is not None,
+            }
 
-                if model_config:
-                    if hasattr(model_config, '__dict__'):
-                        info["architecture"] = getattr(model_config, 'model_architecture', 'transformer')
-                        info["attention_type"] = getattr(model_config, 'attention_type', 'unknown')
-                    else:
-                        info["architecture"] = model_config.get('model_architecture', 'transformer')
-                        info["attention_type"] = model_config.get('attention_type', 'unknown')
+            if model_config:
+                if hasattr(model_config, '__dict__'):
+                    info["architecture"] = getattr(model_config, 'model_architecture', 'transformer')
+                    info["attention_type"] = getattr(model_config, 'attention_type', 'unknown')
+                else:
+                    info["architecture"] = model_config.get('model_architecture', 'transformer')
+                    info["attention_type"] = model_config.get('attention_type', 'unknown')
 
-                checkpoints.append(info)
+            checkpoints.append(info)
 
-            except Exception as e:
-                checkpoints.append({
-                    "name": ckpt_file.name,
-                    "path": str(ckpt_file),
-                    "size_mb": round(ckpt_file.stat().st_size / (1024 * 1024), 2),
-                    "modified": ckpt_file.stat().st_mtime,
-                    "error": str(e),
-                })
+        except Exception as e:
+            checkpoints.append({
+                "name": f"{ckpt_file.parent.parent.name if ckpt_file.parent.name == 'checkpoints' else ckpt_file.parent.name} / {ckpt_file.name}",
+                "path": str(ckpt_file),
+                "size_mb": round(ckpt_file.stat().st_size / (1024 * 1024), 2),
+                "modified": ckpt_file.stat().st_mtime,
+                "error": str(e),
+            })
 
     return {"checkpoints": checkpoints}
 

@@ -1,353 +1,146 @@
 # 🧪 LLM-Lab
 
-<p align="center">
-  <img src="assets/science.jpg" alt="LLM-lab logo" width="200">
-</p>
-
-**A mad scientist's playground for training Large Language Models at home.**
+**1.0.0-rc.1 — release candidate.** Build, train and inspect small language models
+on your own machine. Source code is available under the [MIT license](LICENSE).
 
 <p align="center">
-  <em>“Why would anyone train an LLM from scratch in their garage?”</em><br/>
-  — Reasonable people
+  <img src="assets/science.jpg" alt="LLM-Lab logo" width="200">
 </p>
 
-<p align="center">
-  <strong>“Because we can!”</strong><br/>
-  — Us
-</p>
+LLM-Lab combines an executable visual model workshop with guided experiments.
+Connect layers, train from random weights, compare saved runs and inspect what
+changed. The [capability guide](docs/capabilities.md) distinguishes the dense
+pretraining workflow from experimental architecture and post-training options.
 
-Welcome to LLM-Lab, where we take perfectly good GPUs and turn them into tiny fireballs of matrix multiplication. This is a **completely experimental, utterly unnecessary, but incredibly fun** framework for training and fine-tuning LLMs from scratch. No cloud credits required. Just you, your GPU, and questionable life choices.
+## Start the interface
 
-## 🎯 What's This Madness?
-
-LLM-Lab lets you:
-- ⚡ Train language models **from scratch** (yes, really!)
-- 🎨 Fine-tune them with **SFT** (make them follow instructions)
-- 🎖️ Align them with **RLHF** using PPO, DPO, or GRPO (make them less chaotic)
-- 🔀 Play with **LoRA** adapters (save GPU memory for more experiments)
-- 🧩 Try **Transformer** architectures (boring but reliable) or **Mamba2** (spicy state-space models)
-- 🎪 Add **Mixture of Experts** (because one model is never enough)
-
-All of this runs in a Docker container, consuming your electricity bill and making your GPU fans sound like a jet engine. Worth it? Absolutely.
-
-## 🚀 Quick Start (The "I Have No Idea What I'm Doing" Guide)
-
-### Prerequisites
-- An NVIDIA GPU (the fancier, the better - RTX 4090 recommended, but anything modern works)
-- Docker with NVIDIA Container Toolkit installed
-- A sense of adventure
-- Low expectations
-
-### Launch the Lab
+Use Linux with Python 3.11–3.13, Node 20+, Git, curl and Python venv support.
+CUDA additionally requires a compatible NVIDIA GPU and driver. The launcher
+installs the constrained Python dependencies and the frontend dependencies.
 
 ```bash
-docker run -d -p 8000:8000 \
-  --gpus all \
-  -v $(pwd)/data:/app/data \
-  --name llm-lab \
-  blazux/llm-lab:latest
+git clone https://github.com/blazux/LLM-Lab.git
+cd LLM-Lab
+bash gui/start.sh
 ```
 
-**That's it!** You now have:
-- 🌐 A fancy web UI at http://localhost:8000
-- 🖥️ A retro-style CLI (access with `docker exec -it llm-lab ../../llm-lab.sh`)
-- 💾 A `data/` folder where all your precious checkpoints live
+Open the GUI address printed by the launcher, normally
+**http://127.0.0.1:5174**. Keep the terminal open. Device selection defaults to
+CUDA when a working NVIDIA GPU is detected, otherwise CPU. Choose an explicit
+installation device with `LLMLAB_DEVICE=cpu` or `LLMLAB_DEVICE=cuda`.
 
-### What's in the data/ folder?
+See [installation](docs/installation.md) for environment checks, ports, containers
+and optional accelerators. The checked-out source and locally built images use
+the current code; an older published image may not contain the same features.
 
-```
-data/
-├── best_model.pt              # Your best checkpoint (or worst, we don't judge)
-├── final_model.pt             # When training completes
-├── latest_checkpoint.pt       # For when things crash (they will)
-├── model_config.json          # Model architecture config
-├── config.json                # HuggingFace-compatible config
-├── training_config.json       # Training hyperparameters
-├── best_lora_adapters/        # LoRA adapters if you used them
-└── cache/                     # Tokenizers and dataset cache
-```
+## Learn by experimenting
 
-Everything stays in `/app/data/` - no more subdirectories, no more confusion!
+The dashboard offers two guided paths.
 
-## 🎮 The CLI Experience
+### Learn: what a small model learns
 
-Launch the CLI and you'll be greeted by a glorious retro menu:
+Open [What does a small model learn?](docs/learning-path.md) to train on the
+supplied synthetic corpus and compare held-out prediction errors and fixed-prompt
+continuations before and after training.
 
-```
-╔═══════════════════════════════════════════════════════════════╗
-║                   L L M - L A B O R A T O R Y                 ║
-║       Train, fine-tune, and test custom language models       ║
-╚═══════════════════════════════════════════════════════════════╝
+### Learn: what residual connections do
 
-┌─ Main Menu ─────────────────────────────────────────────────┐
+Open [What do residual connections change?](docs/residual-connections.md) to train
+the same learned layers with and without their bypass additions. Inspect the
+validation curves, pre-clipping gradient norms and comparison controls.
 
-  ⚙️  MODEL SETUP
-  ├────────────────────────────────────────────────────────────
-  │ 1. Configure new model
-  │    Define architecture, choose attention mechanisms, etc.
+Choose the device, budget and seed before starting. Opening a path or importing
+its settings does not start training. The API runs one training job at a time;
+results, configuration and logs remain available after reloading the page.
 
-  🚂 TRAINING
-  ├────────────────────────────────────────────────────────────
-  │ 2. Base training (pretraining)
-  │    Train from scratch on massive text datasets
-  │
-  │ 3. SFT training (instruction tuning)
-  │    Fine-tune on instruction-following datasets
-  │
-  │ 4. RLHF training (alignment)
-  │    Align with human preferences using PPO, DPO, or GRPO
+The paths link to the relevant explanations in
+[Understanding AI](https://www.thelastserver.com/understanding-ai/). The site's
+English and French explanations also provide settings files that can be imported
+into the Lab. Illustrations on the site and measurements from a real run are
+identified separately.
 
-  🔧 TOOLS & UTILITIES
-  ├────────────────────────────────────────────────────────────
-  │ 5. Merge LoRA adapters
-  │    Bake LoRA weights into base model
-  │
-  │ 6. Checkpoint info
-  │    Display detailed checkpoint information (with token reset!)
-  │
-  │ 7. Test model (inference)
-  │    Play with your trained model
-  │
-  │ 8. Export to HuggingFace
-  │    Publish your model to HuggingFace Hub
-  │
-  │ 9. Exit
-  │    Go outside, touch grass
+A short synthetic-corpus exercise demonstrates learning of repeated patterns.
+It does not establish general language competence or guarantee that one
+architecture will outperform another. For a larger corpus, see the
+[TinyStories pretraining tutorial](docs/reference-pretraining.md).
 
-└──────────────────────────────────────────────────────────────┘
-```
+## Build a custom model
 
-## 🎨 The Web UI (For Visual Learners)
+Create a **Pretrain** project and choose an architecture template or a blank
+canvas. Follow **Model → Dataset → Training → Run**:
 
-The web interface is a drag-and-drop playground where you can visually build your model architecture:
+1. Connect operations in the [visual workshop](docs/visual-workshop.md), inspect
+   tensor dimensions and parameters, then test forward and backward computation.
+2. Select [training and validation documents](docs/datasets.md). Read the
+   tokenizer's actual vocabulary before training.
+3. Set the optimizer-update budget, batch, accumulation and evaluation frequency.
+4. Start a new run. Stop and resume saved checkpoints, inspect curves and compare
+   generations using the checkpoint's own configuration.
 
-**Model Configuration - Build Your Frankenstein**
-![Model Configuration](assets/model_config.png)
-*Drag attention heads, normalization layers, and activations like you're playing with LEGO*
+Moving a layer changes the drawing; changing a connection changes the
+computation. A valid graph can still learn poorly. Changing the graph or
+vocabulary starts a new experiment rather than silently replacing a saved model.
 
-**Training Configuration - Set It and Forget It**
-![Training Configuration](assets/training_config.png)
-*Configure optimizers, learning rates, and watch your GPU go brrr*
+The [graphical first-run guide](docs/first-run.md) explains the complete workflow.
+The [architecture templates](docs/architecture-templates.md) are editable,
+scaled educational models initialized with random weights. Modern hybrid and
+MoE templates, SFT and policy optimization remain experimental; see
+[architecture scope](docs/modern-architectures.md) before using them.
 
-**Training Monitor - Watch Numbers Go Down (Hopefully)**
-![Training Monitor](assets/training_monitor.png)
-*Real-time metrics, because anxiety is a feature*
+## Run a saved recipe
 
-> **Note:** The web UI is still a work in progress. When in doubt, use the CLI - it has all the features and won't let you down (much).
+The noninteractive CLI can validate, train, stop, resume, generate and export a
+model from a TOML recipe:
 
-## 🧬 What Can You Build?
-
-### Transformer Models
-The tried-and-true architecture that powers ChatGPT, LLaMA, and every other LLM you've heard of:
-
-- **Attention Types**: MHA, GQA (Llama-style), MQA, MLA (DeepSeek-style KV compression)
-- **Positional Encodings**: RoPE, YARN, ALiBi, Sinusoidal, Learned
-- **Activations**: SwiGLU, GeGLU, ReGLU, ReLU, GELU
-- **Mixture of Experts**: Because one FFN per layer is for cowards
-
-### Mamba2 Models
-State-space models with **O(N) complexity** instead of O(N²). Faster inference, lower memory, but still experimental:
-
-- Linear-time sequence processing
-- No attention mechanism (wild, right?)
-- Built-in convolution for positional awareness
-- Perfect for long sequences
-
-### LoRA (Low-Rank Adaptation)
-Train on a potato? LoRA lets you fine-tune with a fraction of the memory:
-
-- **Presets**: minimal, attention_only, ffn_only, all, custom
-- Merge adapters back into the model when done
-- Stack multiple LoRA stages: Base → SFT (LoRA) → merge → RLHF (LoRA) → merge
-
-## 🎓 The Full Training Pipeline
-
-### 1. Design Your Model (Option 1)
-Pick your architecture, set your size, choose your fancy attention mechanism. Make it tiny (150M params) for experiments or huge (7B+) if your electricity bill means nothing to you.
-
-### 2. Pretrain from Scratch (Option 2)
-Throw gigabytes of text at your model and watch it learn to predict the next word. Uses industry-standard datasets like FineWeb-Edu (1.3T tokens). Estimated time: hours to weeks depending on your GPU and ambitions.
-
-### 3. Supervised Fine-Tuning / SFT (Option 3)
-Teach your model to follow instructions using datasets like Alpaca, Dolly, or your own. Optional LoRA for efficiency.
-
-### 4. RLHF Training (Option 4)
-Align your model with human preferences:
-- **PPO**: Classic reinforcement learning (needs reward model)
-- **DPO**: Direct preference optimization (no reward model needed!)
-- **GRPO**: Group relative policy optimization (middle ground)
-
-### 5. Test and Deploy (Option 7)
-Chat with your creation. Bask in glory or despair. Probably despair initially, but that's part of the fun.
-
-### 6. Checkpoint Inspector (Option 6)
-View everything about your checkpoints:
-- Architecture details
-- Training progress
-- Performance metrics
-- LoRA status
-- **Bonus**: Reset token counters if you want to track from scratch
-
-### 7. Merge LoRA Adapters (Option 5)
-Bake your LoRA weights into the base model. Essential for stacking training stages.
-
-### 8. Export to HuggingFace (Option 8)
-Publish your trained model to HuggingFace Hub with one click. The export automatically detects the best format based on your model configuration.
-
-## 🤗 HuggingFace Export & vLLM Compatibility
-
-Not all model configurations are created equal when it comes to inference tools. Here's what you need to know:
-
-### Export Format Detection
-
-| Architecture | Attention | Pos. Encoding | Activation | MoE | Export Format | vLLM Compatible |
-|--------------|-----------|---------------|------------|-----|---------------|-----------------|
-| Transformer | GQA | RoPE | SwiGLU | No | `llama` | ✅ **Yes** |
-| Transformer | MHA | RoPE | SwiGLU | No | `llama` | ✅ **Yes** |
-| Transformer | MQA | RoPE | SwiGLU | No | `llama` | ✅ **Yes** |
-| Transformer | GQA | RoPE | SwiGLU | Yes | `mixtral` | ✅ **Yes** |
-| Transformer | MLA | RoPE | SwiGLU | No | `custom` | ❌ No* |
-| Transformer | GQA | ALiBi | SwiGLU | No | `custom` | ❌ No* |
-| Transformer | GQA | Sinusoidal | SwiGLU | No | `custom` | ❌ No* |
-| Transformer | GQA | RoPE | GeGLU | No | `custom` | ❌ No* |
-| Mamba2 | N/A | N/A | N/A | N/A | `custom` | ❌ No* |
-
-*\*Custom format models require `trust_remote_code=True` when loading with transformers.*
-
-### What This Means
-
-**vLLM Compatible (`llama` / `mixtral` format):**
-- Native support in vLLM, TGI, and other inference servers
-- Optimized CUDA kernels for maximum throughput
-- No custom code needed to load
-- Just run: `vllm serve username/your-model`
-
-**Custom Format:**
-- Works with `transformers` library using `trust_remote_code=True`
-- Model code is bundled in the HuggingFace repo
-- Slower inference (no optimized kernels)
-- May not work with all inference tools
-
-### Recommended Configurations for Production
-
-If you want your model to be **vLLM compatible** for fast inference, use:
-```
-Architecture:        transformer
-Attention:           gqa (or mha)
-Positional Encoding: rope
-Activation:          swiglu
-MoE:                 false (or true for Mixtral-style)
-```
-
-This matches the Llama architecture and will export in a format that vLLM recognizes natively.
-
-### Setting Up HuggingFace Credentials
-
-To push models to HuggingFace Hub, you need an API token. Here are the options:
-
-**Option 1: Environment Variable (Recommended for Docker)**
 ```bash
-# Add to your docker run command
-docker run -d -p 8000:8000 \
-  --gpus all \
-  -v $(pwd)/data:/app/data \
-  -e HF_TOKEN="hf_your_token_here" \
-  --name llm-lab \
-  blazux/llm-lab:latest
+python src/cli.py validate recipes/small-model-learning.toml --check-data
+python src/cli.py run recipes/small-model-learning.toml --output-dir outputs/my-first-model
+python src/cli.py status outputs/my-first-model
+python src/cli.py generate outputs/my-first-model --prompt "Ada finds"
 ```
 
-Or set it in your shell:
+Activate the installed Python environment first, or replace `python` with
+`.venv/bin/python`. This supplied recipe uses CPU by default; edit its
+`experiment.device` to `cuda` for a compatible CUDA runtime. The GUI offers its
+own visible device selector. Use a new output directory for each new run.
+
+See [recipes and CLI commands](docs/experiments.md) for exact resume, extensions,
+artifact contents and export verification.
+
+## Saved runs and exports
+
+The API stores its registry in `data/runs.sqlite3` and its default outputs under
+`data/runs/<run-id>/`. Set `LLMLAB_DATA_DIR` before startup to choose another
+location. In Docker, persist `/app/data`. Back up the registry together with
+its checkpoint and tokenizer folders. CLI recipes write to the directory
+specified with `--output-dir`.
+
+**Model Tools** loads recorded checkpoints for generation and export. A local
+export contains the weights, tokenizer, configuration and standalone model code.
+Custom exports require `trust_remote_code=True`; review that code before loading
+an unfamiliar package. Publishing to the Hugging Face Hub is an explicit action,
+with private repositories selected by default.
+
+The source license does not replace dataset or model-license requirements.
+Review the dataset license and choose the exported model's license before sharing.
+
+## Documentation and checks
+
+Start at the [documentation index](docs/index.md). The
+[changelog](CHANGELOG.md) includes checkpoint and runtime migration guidance.
+
+With the development dependencies installed in the same environment:
+
 ```bash
-export HF_TOKEN="hf_your_token_here"
-# or
-export HUGGING_FACE_HUB_TOKEN="hf_your_token_here"
+python -m unittest discover -s tests -p 'test_*.py' -v
+python tests/smoke_test.py
+python tests/export_fidelity_test.py
+npm --prefix gui/frontend ci
+npm --prefix gui/frontend test
+npm --prefix gui/frontend run build
 ```
 
-**Option 2: CLI Prompt**
-
-If no token is found, the CLI will ask for it:
-```
-⚠ No HF_TOKEN found in environment
-➤ HuggingFace API token (or press Enter to use cached):
-```
-
-**Option 3: HuggingFace CLI Login**
-
-If you've logged in before with the `huggingface-cli`, the cached token will be used automatically:
-```bash
-pip install huggingface_hub
-huggingface-cli login
-```
-
-> **Get your token at:** https://huggingface.co/settings/tokens (requires "Write" permission)
-
-## 🛠️ Project Structure
-
-```
-LLM-Lab/
-├── src/
-│   ├── cli.py                 # The beautiful CLI
-│   ├── config/                # Configuration classes
-│   ├── model/                 # Transformer & Mamba2 implementations
-│   ├── training/              # Training loops (base, SFT, PPO, DPO, GRPO)
-│   ├── inference/             # Text generation
-│   ├── data/                  # Dataset loaders
-│   └── optimizers/            # AdamW, Lion, Sophia, Muon, etc.
-├── gui/
-│   ├── frontend/              # React + TypeScript web UI
-│   └── backend/               # FastAPI backend
-├── data/                      # Your checkpoints and configs live here
-├── docs/                      # Extensive documentation
-└── Dockerfile                 # One-command deployment
-```
-
-## 🔬 Features That Definitely Work (Probably)
-
-- ✅ **Multiple Architectures**: Transformers and Mamba2
-- ✅ **Complete Pipeline**: Pretrain → SFT → RLHF
-- ✅ **Modern Optimizers**: AdamW, Adafactor, Lion, Sophia, Muon
-- ✅ **LoRA Support**: Save memory, train more
-- ✅ **Web UI + CLI**: Pick your poison
-- ✅ **Real-time Monitoring**: Watch loss curves in real-time
-- ✅ **Checkpoint Inspector**: Know everything about your models
-- ✅ **LoRA Merger**: Stack training stages like pancakes
-- ✅ **HuggingFace Export**: One-click publish to Hub (vLLM compatible!)
-
-## 📚 Documentation (For When Things Inevitably Break)
-
-- 📖 **[Complete Documentation](docs/index.md)** - Start here
-- 🚂 **[Full Training Guide](docs/full-guide.md)** - Step-by-step for the entire pipeline
-- 🐍 **[Mamba2 Guide](docs/mamba2.md)** - State-space model deep dive
-
-## ⚠️ Warnings & Disclaimers
-
-- This will make your GPU hot. Very hot.
-- Training from scratch takes days/weeks, not hours
-- Your first model will probably be terrible (that's normal!)
-- Electricity bills may increase
-- Neighbors may complain about fan noise
-- You might become obsessed with loss curves
-
-## 🤝 Contributing
-
-Found a bug? Have a crazy idea? Want to add support for another exotic architecture?
-
-**Pull requests welcome!** This is an experimental playground - if it's weird, experimental, or fun, we want it.
-
-## 💡 Why Would Anyone Do This?
-
-Good question! Here are some reasons:
-
-1. **Learning**: There's no better way to understand LLMs than building one
-2. **Control**: You own your models, your data, your weights
-3. **Experimentation**: Try architectures/techniques that don't exist yet
-4. **Bragging Rights**: "I trained my own LLM" > "I fine-tuned someone else's"
-5. **Because We Can**: Honestly, this is probably the main reason
-
-## 📜 License
-
-MIT License - Do whatever you want with this code. Train models, break things, have fun!
-
----
-
-**Built with ❤️, caffeine, and questionable judgment**
+The fixtures use local data and tokenizers. CUDA checks use
+`LLMLAB_TEST_DEVICE=cuda` and require an accessible compatible GPU. The
+[capability guide](docs/capabilities.md) includes reproducible architecture and
+profiling commands; timings depend on the device, shape, precision and protocol.

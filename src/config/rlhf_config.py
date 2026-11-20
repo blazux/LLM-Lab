@@ -50,6 +50,16 @@ class RLHFConfig:
     # GRPO-specific parameters
     group_size: int = 4  # Number of responses to generate per prompt (GRPO only)
     grpo_temperature: float = 1.0  # Generation temperature for GRPO groups
+    # DAPO "clip-higher": when set (e.g. 0.28), use an asymmetric clip range for the
+    # importance-ratio surrogate: lower bound stays (1 - clip_range), upper bound
+    # becomes (1 + grpo_clip_higher). None preserves the legacy (unclipped) GRPO loss.
+    grpo_clip_higher: Optional[float] = None
+    # DAPO dynamic sampling: skip groups whose rewards are all identical
+    # (all-correct/all-wrong => zero advantage, no gradient signal).
+    grpo_dynamic_sampling: bool = False
+    # Importance ratio level: "token" (classic GRPO, per-token ratio) or
+    # "sequence" (GSPO: length-normalized sequence-level ratio applied uniformly).
+    grpo_importance_level: str = "token"
 
     # Optimizer
     optimizer: str = "adamw"
@@ -97,6 +107,10 @@ class RLHFConfig:
         # Validate algorithm
         assert self.algorithm in ["ppo", "dpo", "grpo"], \
             f"algorithm must be 'ppo', 'dpo', or 'grpo', got '{self.algorithm}'"
+
+        # Validate GRPO importance ratio level
+        assert self.grpo_importance_level in ["token", "sequence"], \
+            f"grpo_importance_level must be 'token' or 'sequence', got '{self.grpo_importance_level}'"
 
         if self.datasets is None:
             # Default RLHF datasets - industry standards for preference alignment

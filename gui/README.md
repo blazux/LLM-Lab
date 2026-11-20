@@ -10,7 +10,7 @@ A visual, drag-and-drop interface for building and configuring LLM models. Build
 - **Beautiful UI**: Modern, animated interface with smooth interactions
 - **Component Library**:
   - 🔤 Tokenizer blocks
-  - 📍 Positional encoding (RoPE, ALiBi, YARN)
+  - 📍 Positional encoding (RoPE, ALiBi, sinusoidal and learned embeddings)
   - 👁️ Attention mechanisms (MHA, GQA, MQA, MLA)
   - ⚡ Feed-forward networks with various activations
   - 🔷 Complete transformer layers
@@ -25,13 +25,21 @@ gui/
 └── frontend/         # React + TypeScript
     └── src/
         ├── components/    # UI components
-        │   ├── Canvas.tsx         # React Flow canvas
-        │   ├── Sidebar.tsx        # Component palette
+        │   ├── AssemblyWorkshop.tsx         # React Flow canvas
+        │   ├── ArchitectureTemplates.tsx        # Component palette
         │   └── nodes/             # Custom node types
         └── styles/        # CSS styles
 ```
 
-## Setup
+## Current setup
+
+Use the [supported installation guide](../docs/installation.md) and
+`LLMLAB_DEVICE=cpu bash gui/start.sh` from the repository root (or choose CUDA).
+The launcher installs model and API dependencies together in `.venv`.
+The historical manual instructions below install only API dependencies and are
+not a complete standalone installation.
+
+## Historical manual setup
 
 ### Backend Setup
 
@@ -197,3 +205,10 @@ The GUI is designed to integrate seamlessly with the existing LLM-Lab codebase. 
 ## License
 
 Same as LLM-Lab main project
+
+## Durable run monitoring
+
+The Run step restores recorded training history and supports checkpoint resume.
+Model Tools can filter checkpoints by recorded run. See the
+[run and metric guide](../docs/minimal-pretraining.md#recorded-runs-in-the-interface)
+for storage locations, legacy imports and perplexity definitions.

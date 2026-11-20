@@ -1,0 +1,675 @@
+{
+  "modern_attention": {
+    "title": "Modern Self-Attention",
+    "help": "Reference attention from Gemma 4, Llama 4 or Qwen. Head dimension is independent of model width. K/V sharing is an explicit input connection.",
+    "inputs": [
+      "in"
+    ],
+    "outputs": [
+      "out",
+      "kv"
+    ],
+    "params": {
+      "family": {
+        "type": "select",
+        "default": "qwen35",
+        "options": [
+          "qwen35",
+          "qwen4",
+          "gemma4",
+          "llama4"
+        ]
+      },
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "heads": {
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 256,
+        "step": 1
+      },
+      "kv_heads": {
+        "type": "number",
+        "default": 1,
+        "min": 1,
+        "max": 256,
+        "step": 1
+      },
+      "head_dim": {
+        "type": "number",
+        "default": 16,
+        "min": 1,
+        "max": 512,
+        "step": 2
+      },
+      "position": {
+        "type": "select",
+        "default": "rope",
+        "options": [
+          "rope",
+          "none"
+        ]
+      },
+      "rope_base": {
+        "type": "number",
+        "default": 10000000,
+        "min": 2,
+        "max": 1000000000,
+        "step": 1
+      },
+      "rotary_fraction": {
+        "type": "number",
+        "default": 0.25,
+        "min": 0.01,
+        "max": 1,
+        "step": 0.01
+      },
+      "window": {
+        "type": "number",
+        "default": 0,
+        "min": 0,
+        "max": 32768,
+        "step": 1
+      },
+      "qk_norm": {
+        "type": "boolean",
+        "default": true
+      },
+      "temperature": {
+        "type": "boolean",
+        "default": false
+      },
+      "temperature_scale": {
+        "type": "number",
+        "default": 0.1,
+        "min": 0,
+        "max": 10,
+        "step": 0.01
+      },
+      "temperature_floor": {
+        "type": "number",
+        "default": 8192,
+        "min": 1,
+        "max": 10000000,
+        "step": 1
+      },
+      "k_eq_v": {
+        "type": "boolean",
+        "default": false
+      },
+      "kv_shared": {
+        "type": "boolean",
+        "default": false
+      },
+      "eps": {
+        "type": "number",
+        "default": 1e-06,
+        "min": 1e-12,
+        "max": 0.1,
+        "step": 1e-06
+      },
+      "index_heads": {
+        "type": "number",
+        "default": 2,
+        "min": 1,
+        "max": 64,
+        "step": 1
+      },
+      "index_dim": {
+        "type": "number",
+        "default": 16,
+        "min": 1,
+        "max": 512,
+        "step": 2
+      },
+      "budget": {
+        "type": "number",
+        "default": 32,
+        "min": 1,
+        "max": 32768,
+        "step": 1
+      },
+      "compression": {
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 128,
+        "step": 1
+      },
+      "index_loss": {
+        "type": "number",
+        "default": 0.01,
+        "min": 0,
+        "max": 1,
+        "step": 0.001
+      }
+    }
+  },
+  "gated_deltanet": {
+    "title": "Gated DeltaNet",
+    "help": "Causal depthwise convolution, separate Q/K and V heads, gated delta-rule memory and gated RMSNorm. Uses the reference Qwen implementation; no RoPE is applied here.",
+    "inputs": [
+      "in"
+    ],
+    "outputs": [
+      "out"
+    ],
+    "params": {
+      "family": {
+        "type": "select",
+        "default": "qwen35",
+        "options": [
+          "qwen35",
+          "qwen4"
+        ]
+      },
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "key_heads": {
+        "type": "number",
+        "default": 2,
+        "min": 1,
+        "max": 128,
+        "step": 1
+      },
+      "value_heads": {
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 128,
+        "step": 1
+      },
+      "key_dim": {
+        "type": "number",
+        "default": 16,
+        "min": 1,
+        "max": 512,
+        "step": 1
+      },
+      "value_dim": {
+        "type": "number",
+        "default": 16,
+        "min": 1,
+        "max": 512,
+        "step": 1
+      },
+      "conv_kernel": {
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 32,
+        "step": 1
+      },
+      "eps": {
+        "type": "number",
+        "default": 1e-06,
+        "min": 1e-12,
+        "max": 0.1,
+        "step": 1e-06
+      }
+    }
+  },
+  "moe": {
+    "title": "Mixture of Experts",
+    "help": "Token router and routed FFNs. Llama and Qwen include a shared expert; Gemma uses a separately connected dense FFN branch. Router balance loss is returned to the trainer.",
+    "inputs": [
+      "in"
+    ],
+    "outputs": [
+      "out"
+    ],
+    "params": {
+      "family": {
+        "type": "select",
+        "default": "qwen35",
+        "options": [
+          "qwen35",
+          "qwen4",
+          "llama4",
+          "gemma4"
+        ]
+      },
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "experts": {
+        "type": "number",
+        "default": 8,
+        "min": 2,
+        "max": 512,
+        "step": 1
+      },
+      "top_k": {
+        "type": "number",
+        "default": 2,
+        "min": 1,
+        "max": 16,
+        "step": 1
+      },
+      "hidden": {
+        "type": "number",
+        "default": 32,
+        "min": 1,
+        "max": 65536,
+        "step": 1
+      },
+      "shared_hidden": {
+        "type": "number",
+        "default": 32,
+        "min": 1,
+        "max": 65536,
+        "step": 1
+      },
+      "aux_weight": {
+        "type": "number",
+        "default": 0.001,
+        "min": 0,
+        "max": 1,
+        "step": 0.001
+      },
+      "eps": {
+        "type": "number",
+        "default": 1e-06,
+        "min": 1e-12,
+        "max": 0.1,
+        "step": 1e-06
+      }
+    }
+  },
+  "gemma4_norm": {
+    "title": "Gemma 4 RMSNorm",
+    "help": "Gemma 4 scale convention and optional parameter-free RMS normalization. This is distinct from Gemma 1 unit-offset normalization.",
+    "inputs": [
+      "in"
+    ],
+    "outputs": [
+      "out"
+    ],
+    "params": {
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "eps": {
+        "type": "number",
+        "default": 1e-06,
+        "min": 1e-12,
+        "max": 0.1,
+        "step": 1e-06
+      },
+      "learned_scale": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  },
+  "qwen_norm": {
+    "title": "Qwen RMSNorm",
+    "help": "Unit-offset RMSNorm used by the Qwen 3.5 and Qwen4 text backbones.",
+    "inputs": [
+      "in"
+    ],
+    "outputs": [
+      "out"
+    ],
+    "params": {
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "eps": {
+        "type": "number",
+        "default": 1e-06,
+        "min": 1e-12,
+        "max": 0.1,
+        "step": 1e-06
+      }
+    }
+  },
+  "ple_embedding": {
+    "title": "Per-Layer Embeddings",
+    "help": "Gemma 4 token-identity lookup plus normalized contextual projection, producing a separate input for every decoder layer.",
+    "inputs": [
+      "in",
+      "tokens"
+    ],
+    "outputs": [
+      "out"
+    ],
+    "params": {
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "dim": {
+        "type": "number",
+        "default": 16,
+        "min": 1,
+        "max": 2048,
+        "step": 1
+      },
+      "layers": {
+        "type": "number",
+        "default": 5,
+        "min": 1,
+        "max": 64,
+        "step": 1
+      },
+      "eps": {
+        "type": "number",
+        "default": 1e-06,
+        "min": 1e-12,
+        "max": 0.1,
+        "step": 1e-06
+      }
+    }
+  },
+  "ple_apply": {
+    "title": "PLE Gated Injection",
+    "help": "Selects one layer\u2019s PLE features, gates them from hidden states, projects and normalizes them, then adds the residual.",
+    "inputs": [
+      "in",
+      "ple"
+    ],
+    "outputs": [
+      "out"
+    ],
+    "params": {
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "dim": {
+        "type": "number",
+        "default": 16,
+        "min": 1,
+        "max": 2048,
+        "step": 1
+      },
+      "index": {
+        "type": "number",
+        "default": 0,
+        "min": 0,
+        "max": 63,
+        "step": 1
+      },
+      "eps": {
+        "type": "number",
+        "default": 1e-06,
+        "min": 1e-12,
+        "max": 0.1,
+        "step": 1e-06
+      }
+    }
+  },
+  "residual_expand": {
+    "title": "Expand Residual Streams",
+    "help": "Replicates the residual stream into parallel branches for Qwen4 Gated Residual.",
+    "inputs": [
+      "in"
+    ],
+    "outputs": [
+      "out"
+    ],
+    "params": {
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "streams": {
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 8,
+        "step": 1
+      }
+    }
+  },
+  "gr_read": {
+    "title": "Gated Residual Read",
+    "help": "Learned read gates mix parallel residual streams. The state output carries the residual and write gates to Gated Residual Write.",
+    "inputs": [
+      "in"
+    ],
+    "outputs": [
+      "out",
+      "state"
+    ],
+    "params": {
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "streams": {
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 8,
+        "step": 1
+      },
+      "rank": {
+        "type": "number",
+        "default": 16,
+        "min": 1,
+        "max": 2048,
+        "step": 1
+      },
+      "eps": {
+        "type": "number",
+        "default": 1e-06,
+        "min": 1e-12,
+        "max": 0.1,
+        "step": 1e-06
+      }
+    }
+  },
+  "gr_write": {
+    "title": "Gated Residual Write",
+    "help": "Injects the sublayer output into each residual branch using the read node\u2019s write gates.",
+    "inputs": [
+      "in",
+      "state"
+    ],
+    "outputs": [
+      "out"
+    ],
+    "params": {
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "streams": {
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 8,
+        "step": 1
+      }
+    }
+  },
+  "gr_collapse": {
+    "title": "Combine Residual Streams",
+    "help": "Final learned read of the parallel residual branches before final normalization and LM Head.",
+    "inputs": [
+      "in"
+    ],
+    "outputs": [
+      "out"
+    ],
+    "params": {
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "streams": {
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 8,
+        "step": 1
+      },
+      "rank": {
+        "type": "number",
+        "default": 16,
+        "min": 1,
+        "max": 2048,
+        "step": 1
+      },
+      "eps": {
+        "type": "number",
+        "default": 1e-06,
+        "min": 1e-12,
+        "max": 0.1,
+        "step": 1e-06
+      }
+    }
+  },
+  "ngram": {
+    "title": "N-gram Embedding",
+    "help": "Qwen4 hashed local-context embeddings, stream-dependent gates and causal dilated convolution. This is distinct from Gemma PLE. Returns an injection to add to the residual streams.",
+    "inputs": [
+      "in",
+      "tokens"
+    ],
+    "outputs": [
+      "out"
+    ],
+    "params": {
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "streams": {
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 8,
+        "step": 1
+      },
+      "dim": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "ngram_size": {
+        "type": "number",
+        "default": 3,
+        "min": 2,
+        "max": 4,
+        "step": 1
+      },
+      "heads_per_ngram": {
+        "type": "number",
+        "default": 2,
+        "min": 1,
+        "max": 16,
+        "step": 1
+      },
+      "buckets": {
+        "type": "number",
+        "default": 257,
+        "min": 2,
+        "max": 20000000,
+        "step": 1
+      },
+      "conv_kernel": {
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 16,
+        "step": 1
+      },
+      "eos_id": {
+        "type": "number",
+        "default": 0,
+        "min": 0,
+        "max": 1000000,
+        "step": 1
+      },
+      "seed": {
+        "type": "number",
+        "default": 1234,
+        "min": 0,
+        "max": 2147483647,
+        "step": 1
+      },
+      "eps": {
+        "type": "number",
+        "default": 1e-06,
+        "min": 1e-12,
+        "max": 0.1,
+        "step": 1e-06
+      }
+    }
+  },
+  "scale": {
+    "title": "Residual Scale",
+    "help": "Multiplies the residual stream by a fixed scalar.",
+    "inputs": [
+      "in"
+    ],
+    "outputs": [
+      "out"
+    ],
+    "params": {
+      "width": {
+        "type": "number",
+        "default": 64,
+        "min": 1,
+        "max": 8192,
+        "step": 1
+      },
+      "factor": {
+        "type": "number",
+        "default": 1,
+        "min": -100,
+        "max": 100,
+        "step": 0.01
+      }
+    }
+  }
+}

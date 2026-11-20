@@ -1,30 +1,37 @@
 {
   "name": "llm-lab-gui",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.0-rc.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
-    "axios": "^1.6.2",
+    "axios": "^1.20.0",
     "framer-motion": "^10.16.16",
     "lucide-react": "^0.294.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-is": "^18.3.1",
     "reactflow": "^11.10.4",
-    "recharts": "^3.5.0"
+    "recharts": "^3.5.0",
+    "uuid": "^14.0.3"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
-    "autoprefixer": "^10.4.16",
+    "jsdom": "^25.0.1",
     "postcss": "^8.4.32",
-    "tailwindcss": "^3.3.6",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.3.3",
-    "vite": "^5.0.8"
+    "vite": "^6.4.4",
+    "vitest": "^4.1.12"
   }
 }

@@ -3,7 +3,7 @@ import sys
 import threading
 import os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header, Query
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 from sse_starlette.sse import EventSourceResponse
@@ -23,31 +23,89 @@ from training.train import train_model, request_stop
 from training.sft_train import train_sft
 from training.rlhf_train import train_rlhf
 
+from run_store import get_run_store, LANGUAGE_METRICS, LEGACY_METRICS, clean
+
 router = APIRouter()
 
-# Global training state
-training_state = {
-    "is_training": False,
-    "current_step": 0,
-    "max_steps": 0,
-    "current_loss": None,
-    "current_ppl": None,
-    "current_lr": None,
-    "status": "idle",
-    "error": None,
-    "model_config": None,  # Store full model configuration
-    "training_config": None,  # Store full training configuration
-    "training_type": None  # "pretraining", "sft", or "rlhf"
-}
 
-# Queue for metrics updates
-metrics_queue = queue.Queue()
+def make_config(cls, data: Dict[str, Any]):
+    """Instantiate a config dataclass, ignoring keys it doesn't know about."""
+    from dataclasses import fields
+    known = {f.name for f in fields(cls)}
+    return cls(**{k: v for k, v in data.items() if k in known})
+
+
+def idle_state():
+    return dict(is_training=False, current_step=0, max_steps=0, current_loss=None,
+                current_ppl=None, current_lr=None, current_language_loss=None,
+                status='idle', error=None, model_config=None, training_config=None,
+                training_type=None, run_id=None, output_dir=None, metric_definition=None)
+
+
+class PersistentState(dict):
+    def update(self, *args, **kwargs):
+        changes = clean(dict(*args, **kwargs))
+        super().update(changes)
+        if self.get('run_id'):
+            get_run_store().update(self['run_id'], changes)
+
+    def __setitem__(self, key, value):
+        self.update({key: value})
+
+
+training_state = PersistentState(idle_state())
+
+
+def restore_state():
+    if not training_state.get('run_id'):
+        records = get_run_store().list()
+        if records:
+            dict.update(training_state, records[0])
+
+
+class EventSink:
+    """Compatibility with callbacks that previously wrote to a consuming queue."""
+    def put(self, event):
+        if training_state.get('run_id'):
+            get_run_store().append(training_state['run_id'], {
+                'metric_definition': training_state.get('metric_definition'), **event})
+
+    def empty(self):
+        return True
+
+
+metrics_queue = EventSink()
+
+
+def begin_run(request, kind, model, config):
+    requested = request.output_dir
+    output = None if requested == '/app/data' else str(Path(requested).resolve())
+    if output:
+        if any(run['output_dir'] == output for run in get_run_store().list()):
+            raise HTTPException(409, 'This output folder already belongs to a recorded run. Choose a new folder.')
+        if any((folder / name).exists() for folder in (Path(output), Path(output) / 'checkpoints')
+               for name in ('final_model.pt', 'best_model.pt', 'latest_checkpoint.pt')):
+            raise HTTPException(409, 'This folder already contains a trained model. Choose a new output folder; registered checkpoint resume creates one automatically.')
+    definition = LANGUAGE_METRICS if kind == 'pretraining' else LEGACY_METRICS
+    record = get_run_store().create({**idle_state(), 'is_training': True, 'status': 'starting',
+        'output_dir': output, 'model_config': model, 'training_config': config,
+        'training_type': kind, 'metric_definition': definition,
+        'checkpoint_path': getattr(request, 'checkpoint_path', None)}, request.project_id)
+    request.output_dir = record['output_dir']
+    if kind != 'pretraining':
+        config['output_dir'] = request.output_dir
+        get_run_store().update(record['run_id'], {'training_config': config})
+    dict.clear(training_state)
+    dict.update(training_state, get_run_store().get(record['run_id']))
+    return record['run_id']
+
 
 # Training thread
 training_thread = None
 
 
 class TrainingRequest(BaseModel):
+    project_id: Optional[str] = None
     model_cfg: Dict[str, Any]
     training_cfg: Dict[str, Any]
     checkpoint_path: Optional[str] = None
@@ -56,6 +114,7 @@ class TrainingRequest(BaseModel):
 
 
 class RLHFRequest(BaseModel):
+    project_id: Optional[str] = None
     algorithm: str  # "ppo", "dpo", "grpo"
     policy_checkpoint: str
     datasets: List[Dict[str, Any]]
@@ -104,9 +163,13 @@ class RLHFRequest(BaseModel):
     vf_coef: Optional[float] = 0.1
     group_size: Optional[int] = 4
     grpo_temperature: Optional[float] = 1.0
+    grpo_clip_higher: Optional[float] = None
+    grpo_dynamic_sampling: Optional[bool] = False
+    grpo_importance_level: Optional[str] = "token"
 
 
 class SFTRequest(BaseModel):
+    project_id: Optional[str] = None
     policy_checkpoint: str
     datasets: List[Dict[str, Any]]
     optimizer: str
@@ -131,6 +194,12 @@ class SFTRequest(BaseModel):
     eval_steps: int
     save_best_only: bool
     output_dir: str
+    # Loss
+    loss_fn: Optional[str] = "cross_entropy"
+    maxis_n_candidates: Optional[int] = 2048
+    maxis_low_rank_dim: Optional[int] = 64
+    maxis_chunk_size: Optional[int] = 32
+    maxis_aux_weight: Optional[float] = 0.2
     # Model override
     dropout: Optional[float] = None
     # LoRA configuration
@@ -159,6 +228,21 @@ class MetricsCallback:
     def __init__(self, metrics_queue: queue.Queue):
         self.metrics_queue = metrics_queue
         self.step = 0
+
+    def on_metrics(self, metrics):
+        training_state.update(current_step=metrics['step'], current_loss=metrics['loss'],
+            current_lr=metrics['lr'], current_ppl=metrics.get('perplexity'),
+            current_language_loss=metrics.get('language_loss'))
+        self.step = metrics['step']
+        self.metrics_queue.put({'type': 'metrics', 'timestamp': time.time(), **metrics})
+
+    def on_evaluation_metrics(self, metrics):
+        self.metrics_queue.put({'type': 'eval_metrics', 'timestamp': time.time(), **metrics})
+
+    def on_update(self, step: int):
+        """Track every optimizer update, even between metric logging intervals."""
+        self.step = step
+        training_state['current_step'] = step
 
     def on_step(self, step: int, loss: float, lr: float, ppl: float = None):
         """Called after each training step"""
@@ -210,6 +294,7 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
                  additional_steps: int = 0):
     """Run training in a separate thread"""
     try:
+        os.makedirs(output_dir, exist_ok=True)
         # Clear CUDA cache before starting to free memory from previous runs
         import torch
         if torch.cuda.is_available():
@@ -323,11 +408,11 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
                 "timestamp": time.time()
             })
 
-            model_config = ModelConfig(**model_config_dict)
+            model_config = make_config(ModelConfig, model_config_dict)
             model_config.save(f"{output_dir}/model_config.json")
 
         # Create training config object
-        train_config = TrainingConfig(**train_config_dict)
+        train_config = make_config(TrainingConfig, train_config_dict)
 
         # Update max_steps in state (this is the target step, not the count)
         if additional_steps > 0:
@@ -352,6 +437,8 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
 
         training_state["status"] = "training"
 
+        training_state.update(model_config=model_config.__dict__, training_config={**train_config.__dict__, "max_steps": training_state["max_steps"]})
+
         # Create callback for metrics
         callback = MetricsCallback(metrics_queue)
 
@@ -370,11 +457,11 @@ def run_training(model_config_dict: Dict, train_config_dict: Dict,
         metrics_queue.put({
             "type": "log",
             "level": "success",
-            "message": "Training completed successfully!",
+            "message": "Training stopped; checkpoint saved." if training_state.get("status") == "stopping" else "Training completed successfully!",
             "timestamp": time.time()
         })
 
-        training_state["status"] = "completed"
+        training_state["status"] = "stopped" if training_state.get("status") == "stopping" else "completed"
         training_state["is_training"] = False
 
         # Clear CUDA cache after training completes
@@ -432,7 +519,7 @@ def run_sft(sft_config_dict: Dict):
         })
 
         # Create config object
-        sft_config = SFTConfig(**sft_config_dict)
+        sft_config = make_config(SFTConfig, sft_config_dict)
 
         # Update max_steps in state
         training_state["max_steps"] = sft_config.max_steps
@@ -464,7 +551,7 @@ def run_sft(sft_config_dict: Dict):
             "timestamp": time.time()
         })
 
-        training_state["status"] = "completed"
+        training_state["status"] = "stopped" if training_state.get("status") == "stopping" else "completed"
         training_state["is_training"] = False
 
         # Clear CUDA cache after training completes
@@ -498,6 +585,30 @@ async def start_training(request: TrainingRequest):
     if training_state["is_training"]:
         raise HTTPException(status_code=400, detail="Training is already in progress")
 
+    if request.model_cfg.get('assembly') is not None:
+        from .assembly import config_from_request
+        try:
+            config_from_request(request.model_cfg)
+        except (ValueError, TypeError, AssertionError) as error:
+            raise HTTPException(422, detail={'message': str(error), 'node_id': getattr(error, 'node_id', None),
+                                             'hint': getattr(error, 'hint', 'Fix the graph before starting training.')})
+
+    if request.checkpoint_path:
+        import torch
+        from .assembly import config_from_request
+        from model.assembly_runtime import assembly_signature
+        try:
+            saved = torch.load(request.checkpoint_path, map_location='cpu', weights_only=False)['model_config']
+            incoming = request.model_cfg.get('assembly')
+            if incoming is not None or getattr(saved, 'assembly', None) is not None:
+                if (incoming is None or getattr(saved, 'assembly', None) is None
+                        or assembly_signature(config_from_request(request.model_cfg)) != assembly_signature(saved)):
+                    raise HTTPException(409, 'This graph differs from the checkpoint. Restore its graph or start a new training run.')
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise HTTPException(422, f'Could not resume this checkpoint: {error}')
+
     # Calculate correct max_steps for progress tracking
     target_max_steps = request.training_cfg.get("max_steps", 10000)
 
@@ -510,6 +621,8 @@ async def start_training(request: TrainingRequest):
             target_max_steps = start_step + request.additional_steps
         except Exception as e:
             print(f"Warning: Could not load checkpoint for step calculation: {e}")
+
+    run_id = begin_run(request, 'pretraining', request.model_cfg, request.training_cfg)
 
     # Reset state
     training_state.update({
@@ -541,7 +654,7 @@ async def start_training(request: TrainingRequest):
     )
     training_thread.start()
 
-    return {"success": True, "message": "Training started"}
+    return {"success": True, "message": "Training started", "run_id": run_id}
 
 
 @router.post("/sft/start")
@@ -551,6 +664,8 @@ async def start_sft_training(request: SFTRequest):
 
     if training_state["is_training"]:
         raise HTTPException(status_code=400, detail="Training is already in progress")
+
+    run_id = begin_run(request, 'sft', None, request.model_dump())
 
     # Reset state
     training_state.update({
@@ -579,7 +694,7 @@ async def start_sft_training(request: SFTRequest):
     )
     training_thread.start()
 
-    return {"success": True, "message": "SFT training started"}
+    return {"success": True, "message": "SFT training started", "run_id": run_id}
 
 
 def run_rlhf(rlhf_config_dict: Dict):
@@ -631,7 +746,7 @@ def run_rlhf(rlhf_config_dict: Dict):
             })
 
         # Create config object
-        rlhf_config = RLHFConfig(**rlhf_config_dict)
+        rlhf_config = make_config(RLHFConfig, rlhf_config_dict)
 
         # Update max_steps in state
         training_state["max_steps"] = rlhf_config.max_steps
@@ -664,7 +779,7 @@ def run_rlhf(rlhf_config_dict: Dict):
             "timestamp": time.time()
         })
 
-        training_state["status"] = "completed"
+        training_state["status"] = "stopped" if training_state.get("status") == "stopping" else "completed"
         training_state["is_training"] = False
 
         # Clear CUDA cache after training completes
@@ -698,6 +813,8 @@ async def start_rlhf_training(request: RLHFRequest):
     if training_state["is_training"]:
         raise HTTPException(status_code=400, detail="Training is already in progress")
 
+    run_id = begin_run(request, 'rlhf', None, request.model_dump())
+
     # Reset state
     training_state.update({
         "is_training": True,
@@ -725,14 +842,20 @@ async def start_rlhf_training(request: RLHFRequest):
     )
     training_thread.start()
 
-    return {"success": True, "message": f"{request.algorithm.upper()} training started"}
+    return {"success": True, "message": f"{request.algorithm.upper()} training started", "run_id": run_id}
 
 
 @router.post("/stop")
-async def stop_training():
+async def stop_training(run_id: Optional[str] = None):
+    if run_id and run_id != training_state.get("run_id"):
+        raise HTTPException(409, "This is not the active run.")
     """Stop training gracefully"""
     if not training_state["is_training"]:
         raise HTTPException(status_code=400, detail="No training in progress")
+
+    if training_state.get('training_type') == 'learning':
+        from .learning import stop_run
+        return await stop_run(training_state['run_id'])
 
     # Request graceful stop via the global flag
     request_stop()
@@ -741,95 +864,141 @@ async def stop_training():
     return {"success": True, "message": "Stop requested - training will stop after current step"}
 
 
-@router.get("/status")
+@router.get('/status')
 async def get_status():
-    """Get current training status"""
+    restore_state()
     return training_state
 
 
-@router.get("/metrics/stream")
-async def stream_metrics():
-    """Stream training metrics via Server-Sent Events"""
+@router.get('/runs')
+async def list_runs(project_id: Optional[str] = None):
+    return {'runs': get_run_store().list(project_id)}
+
+
+def require_run(run_id):
+    try:
+        return get_run_store().get(run_id)
+    except KeyError:
+        raise HTTPException(404, 'Run not found')
+
+
+class ImportRunRequest(BaseModel):
+    output_dir: str
+    project_id: Optional[str] = None
+
+
+class ResumeRunRequest(BaseModel):
+    additional_steps: int = 0
+
+
+def run_checkpoints(run):
+    root = Path(run['output_dir'])
+    files = [folder / name for folder in (root, root / 'checkpoints')
+             for name in ('final_model.pt', 'latest_checkpoint.pt', 'best_model.pt')]
+    return sorted((path for path in files if path.is_file()), key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+@router.post('/runs/import')
+async def import_run(request: ImportRunRequest):
+    from dataclasses import asdict, is_dataclass
+    import torch
+    root = Path(request.output_dir).resolve()
+    for existing in get_run_store().list():
+        if existing['output_dir'] == str(root):
+            if existing.get('project_id') not in (None, request.project_id):
+                raise HTTPException(409, 'This folder already belongs to another project.')
+            if request.project_id:
+                get_run_store().update(existing['run_id'], {'project_id': request.project_id})
+            return {'run_id': existing['run_id']}
+    files = run_checkpoints({'output_dir': str(root)})
+    if not files:
+        raise HTTPException(422, 'No saved training checkpoint found in this folder or its checkpoints subfolder.')
+    try:
+        saved = torch.load(files[0], map_location='cpu', weights_only=False)
+        model, config = saved['model_config'], saved['train_config']
+        model = asdict(model) if is_dataclass(model) else dict(model)
+        config = asdict(config) if is_dataclass(config) else dict(config)
+        step = saved.get('step', 0)
+        definition = saved.get('metric_definition', LEGACY_METRICS)
+        record = get_run_store().create({**idle_state(), 'output_dir': str(root),
+            'status': 'completed' if step >= config.get('max_steps', step) else 'stopped',
+            'current_step': step, 'max_steps': config.get('max_steps', step),
+            'model_config': model, 'training_config': config, 'training_type': 'pretraining',
+            'metric_definition': definition, 'checkpoint_path': str(files[0])}, request.project_id)
+        metrics = saved.get('final_metrics', saved.get('eval_metrics', {}))
+        if 'val_loss' in metrics:
+            get_run_store().append(record['run_id'], {'type': 'eval_metrics', 'step': step,
+                'eval_loss': metrics['val_loss'], 'eval_perplexity': metrics.get('val_perplexity'),
+                'eval_language_loss': metrics.get('val_language_loss'), 'metric_definition': definition})
+        get_run_store().append(record['run_id'], {'type': 'log', 'level': 'info',
+            'message': 'Imported checkpoint and its saved final evaluation. Earlier live metric history is unavailable.'})
+        return {'run_id': record['run_id']}
+    except (KeyError, ValueError, RuntimeError, TypeError, OSError) as error:
+        raise HTTPException(422, f'Could not import this pretraining checkpoint: {error}')
+
+
+@router.post('/runs/{run_id}/resume')
+async def resume_run(run_id: str, request: ResumeRunRequest):
+    from dataclasses import asdict
+    import torch
+    run = require_run(run_id)
+    if run['training_type'] != 'pretraining':
+        raise HTTPException(422, 'Registered checkpoint resume currently supports pretraining runs.')
+    if request.additional_steps < 0:
+        raise HTTPException(422, 'additional_steps must be non-negative')
+    files = run_checkpoints(run)
+    if not files:
+        raise HTTPException(422, 'No resumable checkpoint has been saved yet.')
+    try:
+        saved = torch.load(files[0], map_location='cpu', weights_only=False)
+        model, config = asdict(saved['model_config']), asdict(saved['train_config'])
+        if request.additional_steps == 0 and saved['step'] >= config['max_steps']:
+            raise HTTPException(409, 'This checkpoint reached its budget. Set additional optimizer steps to extend it.')
+    except (KeyError, TypeError, ValueError, RuntimeError, OSError) as error:
+        raise HTTPException(422, f'Could not read the checkpoint configuration: {error}')
+    return await start_training(TrainingRequest(model_cfg=model, training_cfg=config,
+        checkpoint_path=str(files[0]), additional_steps=request.additional_steps,
+        output_dir='/app/data', project_id=run.get('project_id')))
+
+
+@router.get('/runs/{run_id}')
+async def get_run(run_id: str):
+    return require_run(run_id)
+
+
+@router.get('/runs/{run_id}/events')
+async def get_events(run_id: str, after: int = Query(0, ge=0), limit: int = Query(1000, ge=1, le=5000)):
+    require_run(run_id)
+    return {'events': get_run_store().events(run_id, after, limit)}
+
+
+@router.get('/metrics/stream')
+async def stream_metrics(run_id: Optional[str] = None, after: int = Query(0, ge=0),
+                         last_event_id: Optional[str] = Header(None)):
+    restore_state()
+    selected = run_id or training_state.get('run_id')
+    if selected is None:
+        raise HTTPException(404, 'No run has been recorded yet')
+    require_run(selected)
+    try:
+        cursor = max(after, int(last_event_id or 0))
+    except ValueError:
+        raise HTTPException(400, 'Invalid Last-Event-ID')
 
     async def event_generator():
-        """Generate SSE events from metrics queue"""
-        try:
-            # On new connection, send current state snapshot
-            snapshot = {
-                "type": "snapshot",
-                "is_training": training_state["is_training"],
-                "current_step": training_state["current_step"],
-                "max_steps": training_state["max_steps"],
-                "current_loss": training_state["current_loss"],
-                "current_ppl": training_state["current_ppl"],
-                "current_lr": training_state["current_lr"],
-                "status": training_state["status"],
-                "error": training_state["error"],
-                "model_config": training_state["model_config"],
-                "training_config": training_state["training_config"],
-                "training_type": training_state["training_type"],
-                "timestamp": time.time()
-            }
-            yield {
-                "event": "snapshot",
-                "data": json.dumps(snapshot)
-            }
-
-            # Clear only very old backlogged metrics from queue (older than 30 seconds)
-            # This keeps recent training logs while preventing flooding with stale data
-            current_time = time.time()
-            max_age = 30  # seconds
-            cleared_count = 0
-            kept_metrics = []
-
-            while not metrics_queue.empty():
-                try:
-                    metric = metrics_queue.get_nowait()
-                    # Keep metrics from last 30 seconds
-                    if metric.get('timestamp', 0) > current_time - max_age:
-                        kept_metrics.append(metric)
-                    else:
-                        cleared_count += 1
-                except queue.Empty:
-                    break
-
-            # Put kept metrics back in queue
-            for metric in kept_metrics:
-                metrics_queue.put(metric)
-
-            # Log if we cleared metrics (useful for debugging)
-            if cleared_count > 0:
-                print(f"SSE reconnect: Cleared {cleared_count} old metrics (>{max_age}s), kept {len(kept_metrics)} recent ones")
-
-            # Now stream only new real-time metrics
-            while True:
-                # Check if there are metrics in queue
-                try:
-                    # Non-blocking get with timeout
-                    metric = metrics_queue.get(timeout=0.1)
-                    yield {
-                        "event": "message",
-                        "data": json.dumps(metric)
-                    }
-                except queue.Empty:
-                    # Send heartbeat to keep connection alive
-                    if not training_state["is_training"] and training_state["status"] in ["completed", "error"]:
-                        # Training ended, send final status and close
-                        yield {
-                            "event": "status",
-                            "data": json.dumps({
-                                "type": "status",
-                                "status": training_state["status"],
-                                "error": training_state.get("error")
-                            })
-                        }
-                        break
-
-                    # Small delay to prevent busy waiting
-                    await asyncio.sleep(0.1)
-
-        except asyncio.CancelledError:
-            # Client disconnected
-            pass
+        nonlocal cursor
+        yield {'event': 'snapshot', 'data': json.dumps({'type': 'snapshot', **require_run(selected)})}
+        previous_status = None
+        while True:
+            events = get_run_store().events(selected, cursor)
+            for event in events:
+                cursor = event['event_id']
+                yield {'id': str(cursor), 'event': 'message', 'data': json.dumps(event)}
+            state = require_run(selected)
+            signature = (state['status'], state['is_training'])
+            if signature != previous_status:
+                previous_status = signature
+                yield {'event': 'status', 'data': json.dumps({'type': 'status', **state})}
+            await asyncio.sleep(0.25)
 
     return EventSourceResponse(event_generator())

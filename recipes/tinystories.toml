@@ -1,0 +1,63 @@
+version = 1
+
+[experiment]
+name = "TinyStories dense reference"
+seed = 42
+device = "cuda"
+threads = 4
+
+[data]
+# Download the pinned source files using the commands in docs/experiments.md.
+format = "parquet"
+train = "/tmp/llmlab-tinystories-source/data/train-00000-of-00004-2d5a1467fff1081b.parquet"
+validation = "/tmp/llmlab-tinystories-source/data/validation-00000-of-00001-869c898b519ad725.parquet"
+train_documents = 40000
+validation_documents = 512
+
+[tokenizer]
+type = "byte_bpe"
+vocab_size = 8192
+min_frequency = 2
+
+[model]
+d_model = 384
+n_layers = 6
+n_heads = 6
+n_kv_heads = 2
+d_ff = 1024
+max_seq_len = 256
+dropout = 0.0
+attention_type = "gqa"
+positional_encoding = "rope"
+norm_type = "rmsnorm"
+activation = "swiglu"
+tie_word_embeddings = true
+
+[training]
+max_steps = 1000
+batch_size = 8
+gradient_accumulation_steps = 2
+optimizer = "adamw"
+lr = 0.001
+adamw_beta2 = 0.95
+weight_decay = 0.1
+grad_clip = 1.0
+scheduler = "cosine"
+warmup_steps = 50
+eval_every = 100
+eval_steps = 32
+gradient_checkpointing = false
+use_compile = false
+save_best_only = false
+
+[evaluation]
+prompts = ["Once upon a time, there was a little girl named Lily.", "Tom found a small dog in the garden.", "One day, a little rabbit wanted to find a friend."]
+max_new_tokens = 80
+temperature = 0.8
+top_p = 0.9
+
+[export]
+enabled = true
+model_name = "LLM-Lab TinyStories reference"
+description = "Small from-scratch reference experiment; not an instruction model. Training data: roneneldan/TinyStories, revision f54c09fd23315a6f9c86f9dc80f725de7d8f9c64 (CDLA Sharing 1.0)."
+license = "other"

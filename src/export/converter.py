@@ -104,7 +104,18 @@ MIXTRAL_WEIGHT_MAP = {
 
 def detect_export_format(model_config) -> FormatInfo:
     """
-    Detect the best export format based on model configuration.
+    Detect the export format for a model configuration.
+
+    LLM-Lab's training architecture always includes three details that vanilla
+    Llama/Mixtral implementations do not have:
+      - QK-normalization inside every attention variant
+      - token embeddings scaled by sqrt(d_model)
+      - a quarter-spectrum RoPE (rotation on half the head dims only)
+
+    Exporting to plain `LlamaForCausalLM` / `MixtralForCausalLM` would silently
+    change the forward pass and degrade the model, so every export uses the
+    bundled custom model code (modeling_llmlab.py), which replicates the
+    training-time forward exactly. Loading requires trust_remote_code=True.
 
     Args:
         model_config: ModelConfig object or dict with model configuration
@@ -114,86 +125,29 @@ def detect_export_format(model_config) -> FormatInfo:
     """
     # Handle both dict and ModelConfig
     if hasattr(model_config, '__dict__'):
-        config = model_config
-        get = lambda k, d=None: getattr(config, k, d)
+        get = lambda k, d=None: getattr(model_config, k, d)
     else:
-        config = model_config
-        get = lambda k, d=None: config.get(k, d)
+        get = lambda k, d=None: model_config.get(k, d)
 
-    architecture = get('model_architecture', 'transformer')
+    if get('assembly') is not None:
+        return FormatInfo(ExportFormat.CUSTOM, 'Executable visual assembly with its own exported runtime',
+                          False, 'llm-lab-assembly', ['LLMLabAssemblyForCausalLM'])
     attention_type = get('attention_type', 'gqa')
-    positional_encoding = get('positional_encoding', 'rope')
-    activation = get('activation', 'swiglu')
     use_moe = get('use_moe', False)
 
-    # Mamba2 architecture -> custom
-    if architecture == "mamba2":
-        return FormatInfo(
-            format=ExportFormat.CUSTOM,
-            reason="Mamba2 architecture requires custom model code",
-            vllm_compatible=False,
-            model_type="llm-lab-mamba2",
-            architectures=["Mamba2LLM"]
-        )
-
-    # MLA attention -> custom
     if attention_type == "mla":
-        return FormatInfo(
-            format=ExportFormat.CUSTOM,
-            reason="Multi-Head Latent Attention (MLA) requires custom model code",
-            vllm_compatible=False,
-            model_type="llm-lab-transformer",
-            architectures=["LLMLabForCausalLM"]
-        )
+        detail = "Multi-Head Latent Attention (MLA)"
+    elif use_moe:
+        detail = "Mixture of Experts"
+    else:
+        detail = f"{(attention_type or 'gqa').upper()} attention"
 
-    # MoE -> Mixtral format
-    if use_moe:
-        return FormatInfo(
-            format=ExportFormat.MIXTRAL,
-            reason="MoE architecture maps to Mixtral format",
-            vllm_compatible=True,
-            model_type="mixtral",
-            architectures=["MixtralForCausalLM"]
-        )
-
-    # Standard transformer with compatible options -> Llama format
-    compatible_attention = attention_type in ["gqa", "mha", "mqa"]
-    compatible_pos_enc = positional_encoding in ["rope", "yarn"]
-    compatible_activation = activation in ["swiglu", "silu", "gelu"]
-
-    if compatible_attention and compatible_pos_enc and compatible_activation:
-        return FormatInfo(
-            format=ExportFormat.LLAMA,
-            reason="Architecture compatible with Llama format",
-            vllm_compatible=True,
-            model_type="llama",
-            architectures=["LlamaForCausalLM"]
-        )
-
-    # Non-standard positional encoding
-    if positional_encoding in ["sinusoidal", "learned", "alibi"]:
-        return FormatInfo(
-            format=ExportFormat.CUSTOM,
-            reason=f"Positional encoding '{positional_encoding}' requires custom model code",
-            vllm_compatible=False,
-            model_type="llm-lab-transformer",
-            architectures=["LLMLabForCausalLM"]
-        )
-
-    # Non-standard activation
-    if activation in ["geglu", "reglu", "relu", "leaky_relu"]:
-        return FormatInfo(
-            format=ExportFormat.CUSTOM,
-            reason=f"Activation '{activation}' requires custom model code",
-            vllm_compatible=False,
-            model_type="llm-lab-transformer",
-            architectures=["LLMLabForCausalLM"]
-        )
-
-    # Fallback to custom
     return FormatInfo(
         format=ExportFormat.CUSTOM,
-        reason="Non-standard configuration requires custom model code",
+        reason=(
+            f"{detail} with QK-norm, scaled embeddings and quarter-spectrum RoPE "
+            "— bundled custom code guarantees the exported model matches training exactly"
+        ),
         vllm_compatible=False,
         model_type="llm-lab-transformer",
         architectures=["LLMLabForCausalLM"]
@@ -348,6 +302,17 @@ def convert_checkpoint(
     # Remap weights
     print("Remapping weights...")
     converted_state_dict = remap_weights(state_dict, model_config, target_format)
+
+    # Tied embeddings share memory between the token embedding and lm_head;
+    # safetensors refuses shared tensors. Follow the HF convention: drop the
+    # lm_head copy — from_pretrained re-ties it via config.tie_word_embeddings.
+    for embed_key in ("token_embedding.weight", "model.embed_tokens.weight"):
+        head = converted_state_dict.get("lm_head.weight")
+        embed = converted_state_dict.get(embed_key)
+        if head is not None and embed is not None and head.data_ptr() == embed.data_ptr():
+            del converted_state_dict["lm_head.weight"]
+            print("Tied embeddings detected: dropping lm_head.weight (re-tied on load)")
+            break
 
     # Save if output path provided
     if output_path:

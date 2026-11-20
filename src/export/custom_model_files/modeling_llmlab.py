@@ -6,7 +6,6 @@ AutoModelForCausalLM.from_pretrained() with trust_remote_code=True.
 
 Contains self-contained implementations of:
 - TransformerLLM with various attention types (GQA, MHA, MQA, MLA)
-- Mamba2LLM state space model
 - Various activations (SwiGLU, GeGLU, etc.)
 """
 
@@ -27,18 +26,37 @@ from .configuration_llmlab import LLMLabConfig
 # =============================================================================
 
 class RoPE(nn.Module):
-    """Rotary Position Embedding"""
-    def __init__(self, d_k: int, max_seq_len: int):
+    """Rotary Position Embedding.
+
+    The cos/sin tables are built lazily on first forward (on the input's
+    device) rather than in __init__, so the module works with transformers'
+    meta-device initialization (from_pretrained) and device_map loading.
+    """
+    def __init__(self, d_k: int, max_seq_len: int, fraction: float = 0.5):
         super().__init__()
-        angular_freq = (1 / 10000) ** torch.linspace(0, 1, steps=d_k // 4, dtype=torch.float32)
-        angular_freq = torch.cat([angular_freq, angular_freq.new_zeros(d_k // 4)])
-        t = torch.arange(max_seq_len, dtype=torch.float32)
+        self.d_k = d_k
+        self.max_seq_len = max_seq_len
+        self.fraction = fraction
+        self.cos = None
+        self.sin = None
+
+    def _build_tables(self, device):
+        n_pairs = self.d_k // 2
+        n_active = min(n_pairs, max(1, round(n_pairs * self.fraction)))
+        # Match the training module's CPU-built float32 tables exactly. CUDA
+        # trigonometry differs slightly and bf16 rounding can amplify this into
+        # different logits after export. Keep lazy construction for meta loading.
+        angular_freq = (1 / 10000) ** torch.linspace(0, 1, steps=n_active, dtype=torch.float32)
+        angular_freq = torch.cat([angular_freq, angular_freq.new_zeros(n_pairs - n_active)])
+        t = torch.arange(self.max_seq_len, dtype=torch.float32)
         theta = torch.einsum("i,j -> ij", t, angular_freq)
-        self.register_buffer('cos', theta.cos(), persistent=False)
-        self.register_buffer('sin', theta.sin(), persistent=False)
+        self.cos = theta.cos().to(device)
+        self.sin = theta.sin().to(device)
 
     def forward(self, x_BTHD: torch.Tensor):
         """x: (batch, n_heads, seq_len, d_k)"""
+        if self.cos is None or self.cos.device != x_BTHD.device:
+            self._build_tables(x_BTHD.device)
         assert self.cos.size(0) >= x_BTHD.size(-2)
         cos = self.cos[None, None, :x_BTHD.size(-2), :]
         sin = self.sin[None, None, :x_BTHD.size(-2), :]
@@ -61,13 +79,59 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_kv_heads * n_rep, slen, head_dim)
 
 
+class LightningIndexer(nn.Module):
+    """DSA-style lightning indexer — mirrors training module exactly."""
+
+    def __init__(self, d_model: int, n_heads: int = 4, d_index: int = 32):
+        super().__init__()
+        self.n_heads = n_heads
+        self.d_index = d_index
+        self.q_proj = nn.Linear(d_model, n_heads * d_index, bias=False)
+        self.k_proj = nn.Linear(d_model, d_index, bias=False)
+        self.w_proj = nn.Linear(d_model, n_heads, bias=False)
+
+    def scores(self, x):
+        B, T, _ = x.shape
+        q = self.q_proj(x).view(B, T, self.n_heads, self.d_index)
+        k = self.k_proj(x)
+        w = self.w_proj(x)
+        qk = torch.einsum('bthd,bsd->bhts', q, k)
+        return torch.einsum('bth,bhts->bts', w, F.relu(qk))
+
+
+def _topk_sparse_mask(index_scores: torch.Tensor, top_k: int) -> torch.Tensor:
+    B, T, _ = index_scores.shape
+    causal = torch.tril(torch.ones(T, T, dtype=torch.bool, device=index_scores.device))
+    scores = index_scores.masked_fill(~causal, float('-inf'))
+    k = min(top_k, T)
+    topk_idx = scores.topk(k, dim=-1).indices
+    mask = torch.zeros(B, T, T, dtype=torch.bool, device=index_scores.device)
+    mask.scatter_(-1, topk_idx, True)
+    mask = mask & causal
+    # diagonal always included (mirrors training-time mask exactly)
+    mask.diagonal(dim1=-2, dim2=-1).fill_(True)
+    return mask.unsqueeze(1)
+
+
 class GroupedQueryAttention(nn.Module):
-    """Grouped Query Attention"""
+    """Grouped Query Attention (also covers MHA and MQA as special cases).
+
+    Mirrors the training-time modules exactly:
+    - MHA: num_kv_heads == num_heads, no QK-norm
+    - MQA: num_kv_heads == 1, no QK-norm
+    - GQA: num_kv_heads from config, QK-norm on each head
+    """
     def __init__(self, config: LLMLabConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.num_kv_heads = config.num_key_value_heads
+        self.attention_type = config.attention_type
+        if self.attention_type == "mha":
+            self.num_kv_heads = self.num_heads
+        elif self.attention_type == "mqa":
+            self.num_kv_heads = 1
+        else:
+            self.num_kv_heads = config.num_key_value_heads
         self.head_dim = config.head_dim
         self.num_kv_groups = self.num_heads // self.num_kv_heads
         self.dropout = config.attention_dropout
@@ -77,15 +141,36 @@ class GroupedQueryAttention(nn.Module):
         self.v_proj = nn.Linear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=config.attention_bias)
         self.w_o = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
 
-        # QK normalization
-        if config.norm_type == "rmsnorm":
-            self.q_norm = nn.RMSNorm(self.head_dim, eps=config.norm_eps)
-            self.k_norm = nn.RMSNorm(self.head_dim, eps=config.norm_eps)
+        # QK normalization (training code only applies it to GQA)
+        if self.attention_type == "gqa":
+            if config.norm_type == "rmsnorm":
+                self.q_norm = nn.RMSNorm(self.head_dim, eps=config.norm_eps)
+                self.k_norm = nn.RMSNorm(self.head_dim, eps=config.norm_eps)
+            else:
+                self.q_norm = nn.LayerNorm(self.head_dim, eps=config.norm_eps)
+                self.k_norm = nn.LayerNorm(self.head_dim, eps=config.norm_eps)
         else:
-            self.q_norm = nn.LayerNorm(self.head_dim, eps=config.norm_eps)
-            self.k_norm = nn.LayerNorm(self.head_dim, eps=config.norm_eps)
+            self.q_norm = None
+            self.k_norm = None
 
         self.pos_encoding = None
+
+        # Qwen3-Next-style sigmoid output gate
+        if getattr(config, 'use_attention_gate', False):
+            self.attn_gate = nn.Linear(config.hidden_size, self.num_heads * self.head_dim, bias=False)
+        else:
+            self.attn_gate = None
+
+        # DSA-style sparse attention
+        if getattr(config, 'use_sparse_attention', False):
+            self.indexer = LightningIndexer(
+                config.hidden_size,
+                n_heads=getattr(config, 'sparse_indexer_heads', 4),
+                d_index=getattr(config, 'sparse_indexer_dim', 32),
+            )
+            self.sparse_top_k = getattr(config, 'sparse_top_k', 512)
+        else:
+            self.indexer = None
 
     def forward(self, x):
         batch_size, seq_len = x.size(0), x.size(1)
@@ -94,8 +179,9 @@ class GroupedQueryAttention(nn.Module):
         k = self.k_proj(x).view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
         v = self.v_proj(x).view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
 
-        q = self.q_norm(q)
-        k = self.k_norm(k)
+        if self.q_norm is not None:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
 
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
@@ -108,11 +194,19 @@ class GroupedQueryAttention(nn.Module):
         k = repeat_kv(k, self.num_kv_groups)
         v = repeat_kv(v, self.num_kv_groups)
 
-        attn_output = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
-        )
+        if self.indexer is not None:
+            sparse_mask = _topk_sparse_mask(self.indexer.scores(x), self.sparse_top_k)
+            attn_output = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=sparse_mask, dropout_p=self.dropout if self.training else 0.0
+            )
+        else:
+            attn_output = F.scaled_dot_product_attention(
+                q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
+            )
 
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.hidden_size)
+        if self.attn_gate is not None:
+            attn_output = attn_output * torch.sigmoid(self.attn_gate(x))
         return self.w_o(attn_output)
 
 
@@ -148,6 +242,12 @@ class MultiHeadLatentAttention(nn.Module):
             self.k_norm = nn.LayerNorm(self.head_dim, eps=config.norm_eps)
 
         self.pos_encoding = None
+
+        # Qwen3-Next-style sigmoid output gate
+        if getattr(config, 'use_attention_gate', False):
+            self.attn_gate = nn.Linear(config.hidden_size, self.num_heads * self.head_dim, bias=False)
+        else:
+            self.attn_gate = None
 
     def forward(self, x):
         batch_size, seq_len = x.size(0), x.size(1)
@@ -190,6 +290,8 @@ class MultiHeadLatentAttention(nn.Module):
         )
 
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.num_heads * self.head_dim)
+        if self.attn_gate is not None:
+            attn_output = attn_output * torch.sigmoid(self.attn_gate(x))
         return self.w_o(attn_output)
 
 
@@ -223,6 +325,19 @@ class GeGLU(nn.Module):
         return self.down_proj(self.dropout(F.gelu(self.gate_proj(x)) * self.up_proj(x)))
 
 
+class ReGLU(nn.Module):
+    """ReGLU activation"""
+    def __init__(self, hidden_size: int, intermediate_size: int, dropout: float = 0.0):
+        super().__init__()
+        self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
+        self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
+        self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        return self.down_proj(self.dropout(F.relu(self.gate_proj(x)) * self.up_proj(x)))
+
+
 class StandardFFN(nn.Module):
     """Standard FFN with configurable activation"""
     def __init__(self, hidden_size: int, intermediate_size: int, activation: str = "gelu", dropout: float = 0.0):
@@ -230,10 +345,220 @@ class StandardFFN(nn.Module):
         self.linear1 = nn.Linear(hidden_size, intermediate_size)
         self.linear2 = nn.Linear(intermediate_size, hidden_size)
         self.dropout = nn.Dropout(dropout)
-        self.activation = F.gelu if activation == "gelu" else F.silu if activation == "silu" else F.relu
+        if activation == "relu":
+            self.activation = F.relu
+        elif activation == "relu2":
+            self.activation = lambda x: F.relu(x).square()
+        elif activation == "silu":
+            self.activation = F.silu
+        elif activation == "leaky_relu":
+            self.activation = lambda x: F.leaky_relu(x, 0.01)
+        else:
+            self.activation = F.gelu
 
     def forward(self, x):
         return self.linear2(self.dropout(self.activation(self.linear1(x))))
+
+
+def _make_expert(config: LLMLabConfig):
+    """Build a single FFN matching the training-time expert layout"""
+    act = config.hidden_act
+    if act == "swiglu":
+        return SwiGLU(config.hidden_size, config.intermediate_size, config.dropout)
+    if act == "geglu":
+        return GeGLU(config.hidden_size, config.intermediate_size, config.dropout)
+    if act == "reglu":
+        return ReGLU(config.hidden_size, config.intermediate_size, config.dropout)
+    return StandardFFN(config.hidden_size, config.intermediate_size, act, config.dropout)
+
+
+class MoEFFN(nn.Module):
+    """Mixture of Experts FFN (inference version of the training MoEFFN).
+
+    Same parameter layout as training: `router` + `experts.{i}` so exported
+    weights load 1:1. Auxiliary losses are training-only and omitted here.
+    """
+    def __init__(self, config: LLMLabConfig):
+        super().__init__()
+        self.num_experts = config.num_experts
+        self.num_experts_per_token = config.num_experts_per_token
+        self.router_type = getattr(config, 'moe_router_type', 'softmax')
+        self.router = nn.Linear(config.hidden_size, self.num_experts, bias=False)
+        if getattr(config, 'moe_aux_free_bias', False):
+            self.register_buffer('expert_bias', torch.zeros(self.num_experts))
+        else:
+            self.expert_bias = None
+        self.experts = nn.ModuleList([_make_expert(config) for _ in range(self.num_experts)])
+        self.shared_expert = _make_expert(config) if getattr(config, 'moe_shared_expert', False) else None
+
+    def forward(self, x):
+        batch_size, seq_len, hidden = x.shape
+        x_flat = x.view(-1, hidden)
+
+        router_logits = self.router(x_flat)
+        if self.router_type == 'sigmoid':
+            router_probs = torch.sigmoid(router_logits)
+        else:
+            router_probs = F.softmax(router_logits, dim=-1)
+        selection_scores = router_probs if self.expert_bias is None else router_probs + self.expert_bias
+        _, topk_indices = torch.topk(selection_scores, k=self.num_experts_per_token, dim=-1)
+        topk_probs = router_probs.gather(-1, topk_indices)
+        topk_probs = topk_probs / (topk_probs.sum(dim=-1, keepdim=True) + 1e-9)
+
+        output = torch.zeros_like(x_flat)
+        for expert_idx in range(self.num_experts):
+            expert_mask = (topk_indices == expert_idx)
+            token_mask = expert_mask.any(dim=-1)
+            if not token_mask.any():
+                continue
+            expert_out = self.experts[expert_idx](x_flat[token_mask])
+            expert_weights = torch.zeros(token_mask.sum(), device=x.device, dtype=x.dtype)
+            for k in range(self.num_experts_per_token):
+                mask_k = expert_mask[token_mask, k]
+                expert_weights[mask_k] = topk_probs[token_mask, k][mask_k]
+            output[token_mask] += expert_weights.unsqueeze(-1) * expert_out
+
+        if self.shared_expert is not None:
+            output = output + self.shared_expert(x_flat)
+
+        return output.view(batch_size, seq_len, hidden)
+
+
+# =============================================================================
+# GATED DELTANET (hybrid linear layers)
+# =============================================================================
+
+def _recurrent_gated_delta_rule(q, k, v, beta, g, initial_state=None):
+    """Sequential gated delta rule (adapted from MIT-licensed fla-org reference).
+
+    q, k: (B, T, H, K) — L2-normalized; v: (B, T, H, V); beta, g: (B, T, H),
+    g in log space. Returns output (B, T, H, V).
+    """
+    q, k, v = (x.transpose(1, 2).contiguous().to(torch.float32) for x in (q, k, v))
+    beta, g = (x.transpose(1, 2).contiguous().to(torch.float32) for x in (beta, g))
+    B, H, T, K = k.shape
+    V = v.shape[-1]
+    o = torch.zeros(B, H, T, V, dtype=torch.float32, device=v.device)
+    S = torch.zeros(B, H, K, V, dtype=torch.float32, device=v.device)
+    if initial_state is not None:
+        S = initial_state.to(torch.float32)
+    q = q * (K ** -0.5)
+
+    for i in range(T):
+        b_q, b_k, b_v = q[:, :, i], k[:, :, i], v[:, :, i]
+        S = S * g[:, :, i].exp()[..., None, None]
+        b_v = b_v - (S * b_k[..., None]).sum(-2)
+        b_v = b_v * beta[:, :, i][..., None]
+        S = S + b_k.unsqueeze(-1) * b_v.unsqueeze(-2)
+        o[:, :, i] = torch.einsum('bhd,bhdm->bhm', b_q, S)
+
+    return o.transpose(1, 2).contiguous()
+
+
+def _chunk_gated_delta_rule(q, k, v, beta, g, chunk_size=64):
+    """Chunkwise-parallel gated delta rule (WY/UT transform) — identical to the
+    sequential form, O(T/C) sequential steps. Used for multi-token prefill."""
+    C = chunk_size
+    scale = q.shape[-1] ** -0.5
+
+    q, k, v = (x.transpose(1, 2).contiguous().to(torch.float32) for x in (q, k, v))
+    beta, g = (x.transpose(1, 2).contiguous().to(torch.float32) for x in (beta, g))
+
+    T = q.shape[-2]
+    pad = (C - T % C) % C
+    if pad > 0:
+        q = F.pad(q, (0, 0, 0, pad))
+        k = F.pad(k, (0, 0, 0, pad))
+        v = F.pad(v, (0, 0, 0, pad))
+        beta = F.pad(beta, (0, pad))
+        g = F.pad(g, (0, pad))
+
+    B, H, L, K = q.shape
+    V = v.shape[-1]
+    n = L // C
+    q = q * scale
+    v = v * beta[..., None]
+    k_beta = k * beta[..., None]
+
+    q = q.view(B, H, n, C, K)
+    k = k.view(B, H, n, C, K)
+    v = v.view(B, H, n, C, V)
+    k_beta = k_beta.view(B, H, n, C, K)
+    decay = g.view(B, H, n, C).cumsum(-1)
+
+    decay_exp = decay.exp()[..., None]
+    L_mask = ((decay.unsqueeze(-1) - decay.unsqueeze(-2)).tril().exp().float()).tril()
+
+    diag_mask = torch.triu(torch.ones(C, C, dtype=torch.bool, device=q.device), diagonal=0)
+    A = ((k_beta @ k.transpose(-1, -2)) * L_mask).masked_fill(diag_mask, 0)
+    # UT transform: attn = (I + A)^{-1}, a unit-lower-triangular solve
+    eye = torch.eye(C, dtype=torch.float32, device=q.device)
+    attn = torch.linalg.solve_triangular(A + eye, eye.expand_as(A),
+                                         upper=False, unitriangular=True)
+
+    v = attn @ v
+    k_cumdecay = attn @ (k_beta * decay_exp)
+
+    S = k.new_zeros(B, H, K, V)
+    o = torch.zeros_like(v)
+    strict_mask = torch.triu(torch.ones(C, C, dtype=torch.bool, device=q.device), diagonal=1)
+    for i in range(n):
+        q_i, k_i, v_i = q[:, :, i], k[:, :, i], v[:, :, i]
+        attn_i = (q_i @ k_i.transpose(-1, -2) * L_mask[:, :, i]).masked_fill_(strict_mask, 0)
+        v_new = v_i - k_cumdecay[:, :, i] @ S
+        o_inter = (q_i * decay[:, :, i, :, None].exp()) @ S
+        o[:, :, i] = o_inter + attn_i @ v_new
+        S = S * decay[:, :, i, -1, None, None].exp() + \
+            (k_i * (decay[:, :, i, -1, None] - decay[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
+
+    o = o.view(B, H, L, V)[:, :, :T]
+    return o.transpose(1, 2).contiguous()
+
+
+class GatedDeltaNet(nn.Module):
+    """Gated DeltaNet token mixer — mirrors the training-time module exactly."""
+
+    def __init__(self, config: LLMLabConfig):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.num_heads = config.num_attention_heads
+        self.head_dim = config.head_dim
+        inner = self.num_heads * self.head_dim
+        self.q_proj = nn.Linear(self.hidden_size, inner, bias=False)
+        self.k_proj = nn.Linear(self.hidden_size, inner, bias=False)
+        self.v_proj = nn.Linear(self.hidden_size, inner, bias=False)
+        self.b_proj = nn.Linear(self.hidden_size, self.num_heads, bias=False)
+        self.a_proj = nn.Linear(self.hidden_size, self.num_heads, bias=False)
+        self.A_log = nn.Parameter(torch.zeros(self.num_heads))
+        self.dt_bias = nn.Parameter(torch.zeros(self.num_heads))
+        self.o_norm = nn.RMSNorm(self.head_dim, eps=config.norm_eps)
+        self.g_proj = nn.Linear(self.hidden_size, inner, bias=False)
+        self.w_o = nn.Linear(inner, self.hidden_size, bias=False)
+        self.pos_encoding = None
+
+    def forward(self, x):
+        B, T, _ = x.shape
+        q = F.normalize(self.q_proj(x).view(B, T, self.num_heads, self.head_dim), p=2, dim=-1)
+        k = F.normalize(self.k_proj(x).view(B, T, self.num_heads, self.head_dim), p=2, dim=-1)
+        v = self.v_proj(x).view(B, T, self.num_heads, self.head_dim)
+        beta = torch.sigmoid(self.b_proj(x))
+        g = -self.A_log.float().exp() * F.softplus(self.a_proj(x).float() + self.dt_bias)
+
+        if T > 1:
+            o = _chunk_gated_delta_rule(q, k, v, beta, g)
+        else:
+            o = _recurrent_gated_delta_rule(q, k, v, beta, g)
+        o = self.o_norm(o.to(x.dtype))
+        o = o * F.silu(self.g_proj(x).view(B, T, self.num_heads, self.head_dim))
+        return self.w_o(o.reshape(B, T, self.num_heads * self.head_dim))
+
+
+def _is_linear_layer(config, layer_idx: int) -> bool:
+    pattern = getattr(config, 'hybrid_pattern', None)
+    if not pattern:
+        return False
+    lin, att = (int(p) for p in pattern.split(':'))
+    return (layer_idx % (lin + att)) < lin
 
 
 # =============================================================================
@@ -247,19 +572,23 @@ class TransformerBlock(nn.Module):
         self.config = config
         self.layer_idx = layer_idx
 
-        # Attention
-        if config.attention_type == "mla":
+        # Token mixer: attention, or Gated DeltaNet on hybrid linear layers
+        if _is_linear_layer(config, layer_idx):
+            self.attention = GatedDeltaNet(config)
+        elif config.attention_type == "mla":
             self.attention = MultiHeadLatentAttention(config)
         else:
             self.attention = GroupedQueryAttention(config)
 
-        # Feed-forward
-        if config.hidden_act in ["swiglu", "silu"]:
-            self.feed_forward = SwiGLU(config.hidden_size, config.intermediate_size, config.dropout)
-        elif config.hidden_act == "geglu":
-            self.feed_forward = GeGLU(config.hidden_size, config.intermediate_size, config.dropout)
+        # Feed-forward: MoE on this layer if enabled (mirrors training selection)
+        moe_layers = getattr(config, "moe_layers", None)
+        use_moe_this_layer = getattr(config, "use_moe", False) and (
+            moe_layers is None or layer_idx in moe_layers
+        )
+        if use_moe_this_layer:
+            self.feed_forward = MoEFFN(config)
         else:
-            self.feed_forward = StandardFFN(config.hidden_size, config.intermediate_size, config.hidden_act, config.dropout)
+            self.feed_forward = _make_expert(config)
 
         # Normalization
         if config.norm_type == "rmsnorm":
@@ -301,6 +630,9 @@ class LLMLabPreTrainedModel(PreTrainedModel):
 class LLMLabForCausalLM(LLMLabPreTrainedModel):
     """LLM-Lab Transformer for Causal Language Modeling"""
 
+    # Dict form required by transformers >= 5 (target param -> source param)
+    _tied_weights_keys = {"lm_head.weight": "token_embedding.weight"}
+
     def __init__(self, config: LLMLabConfig):
         super().__init__(config)
         self.config = config
@@ -310,7 +642,8 @@ class LLMLabForCausalLM(LLMLabPreTrainedModel):
 
         # Positional encoding
         if config.positional_encoding in ["rope", "yarn"]:
-            self.pos_encoding = RoPE(config.head_dim, config.max_position_embeddings)
+            self.pos_encoding = RoPE(config.head_dim, config.max_position_embeddings,
+                                     fraction=getattr(config, 'rope_fraction', 0.5))
         else:
             self.pos_encoding = None
 
@@ -321,7 +654,10 @@ class LLMLabForCausalLM(LLMLabPreTrainedModel):
 
         # Setup positional encoding for attention layers
         if self.pos_encoding is not None:
-            for block in self.transformer_blocks:
+            nope_every = getattr(config, 'nope_every', None)
+            for i, block in enumerate(self.transformer_blocks):
+                if nope_every and (i + 1) % nope_every == 0:
+                    continue
                 block.attention.pos_encoding = self.pos_encoding
 
         # Final normalization
@@ -376,164 +712,6 @@ class LLMLabForCausalLM(LLMLabPreTrainedModel):
             x = block(x)
 
         # Final norm and output
-        x = self.norm(x)
-        logits = self.lm_head(x)
-
-        loss = None
-        if labels is not None:
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            loss = F.cross_entropy(
-                shift_logits.view(-1, shift_logits.size(-1)),
-                shift_labels.view(-1)
-            )
-
-        if not return_dict:
-            output = (logits,)
-            return (loss,) + output if loss is not None else output
-
-        return CausalLMOutputWithPast(
-            loss=loss,
-            logits=logits,
-            past_key_values=None,
-            hidden_states=None,
-            attentions=None,
-        )
-
-    def prepare_inputs_for_generation(self, input_ids, **kwargs):
-        return {"input_ids": input_ids}
-
-
-# =============================================================================
-# MAMBA2 MODEL
-# =============================================================================
-
-class Mamba2Block(nn.Module):
-    """Mamba2 State Space Model block"""
-    def __init__(self, config: LLMLabConfig):
-        super().__init__()
-        self.d_model = config.hidden_size
-        self.d_state = config.state_size
-        self.d_conv = config.conv_kernel_size
-        self.expand = config.expand_factor
-        self.d_inner = self.d_model * self.expand
-
-        # Normalization
-        if config.norm_type == "rmsnorm":
-            self.norm = nn.RMSNorm(self.d_model, eps=config.norm_eps)
-        else:
-            self.norm = nn.LayerNorm(self.d_model, eps=config.norm_eps)
-
-        # Projections
-        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=False)
-        self.conv1d = nn.Conv1d(
-            self.d_inner, self.d_inner, self.d_conv,
-            groups=self.d_inner, padding=self.d_conv - 1, bias=True
-        )
-
-        # SSM parameters
-        self.A_log = nn.Parameter(torch.log(torch.randn(self.d_inner, self.d_state)))
-        self.D = nn.Parameter(torch.ones(self.d_inner))
-
-        dt_rank = (self.d_model + 15) // 16
-        self.dt_proj = nn.Linear(dt_rank, self.d_inner, bias=True)
-        self.x_proj = nn.Linear(self.d_inner, dt_rank, bias=False)
-        self.B_proj = nn.Linear(self.d_inner, self.d_state, bias=False)
-        self.C_proj = nn.Linear(self.d_inner, self.d_state, bias=False)
-        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=False)
-
-    def forward(self, x):
-        residual = x
-        x = self.norm(x)
-
-        xz = self.in_proj(x)
-        x_input, z = xz.chunk(2, dim=-1)
-
-        x_conv = self.conv1d(x_input.transpose(1, 2))[..., :x.size(1)].transpose(1, 2)
-        x_conv = F.silu(x_conv)
-
-        dt = F.softplus(self.dt_proj(self.x_proj(x_conv)))
-        B = self.B_proj(x_conv)
-        C = self.C_proj(x_conv)
-        A = -torch.exp(self.A_log)
-
-        # Simplified selective scan
-        y = self._selective_scan(x_conv, dt, A, B, C)
-        y = y + self.D * x_conv
-        y = y * F.silu(z)
-
-        return residual + self.out_proj(y)
-
-    def _selective_scan(self, x, dt, A, B, C):
-        batch_size, seq_len, d_inner = x.shape
-        d_state = A.shape[1]
-
-        h = torch.zeros(batch_size, d_inner, d_state, device=x.device, dtype=x.dtype)
-        y = []
-
-        for t in range(seq_len):
-            dt_t = dt[:, t, :].unsqueeze(-1)
-            B_t = B[:, t, :].unsqueeze(1)
-            x_t = x[:, t, :].unsqueeze(-1)
-            C_t = C[:, t, :].unsqueeze(1)
-
-            h = h + dt_t * (A * h + B_t * x_t)
-            y_t = (C_t * h).sum(dim=-1)
-            y.append(y_t)
-
-        return torch.stack(y, dim=1)
-
-
-class Mamba2LLM(LLMLabPreTrainedModel):
-    """Mamba2 State Space Model for Language Modeling"""
-
-    def __init__(self, config: LLMLabConfig):
-        super().__init__(config)
-        self.config = config
-
-        self.token_embedding = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.layers = nn.ModuleList([
-            Mamba2Block(config) for _ in range(config.num_hidden_layers)
-        ])
-
-        if config.norm_type == "rmsnorm":
-            self.norm = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
-        else:
-            self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps)
-
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-
-        if config.tie_word_embeddings:
-            self.lm_head.weight = self.token_embedding.weight
-
-        self.post_init()
-
-    def get_input_embeddings(self):
-        return self.token_embedding
-
-    def set_input_embeddings(self, value):
-        self.token_embedding = value
-
-    def get_output_embeddings(self):
-        return self.lm_head
-
-    def set_output_embeddings(self, new_embeddings):
-        self.lm_head = new_embeddings
-
-    def forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        labels: Optional[torch.LongTensor] = None,
-        return_dict: Optional[bool] = None,
-        **kwargs,
-    ) -> Union[Tuple, CausalLMOutputWithPast]:
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        x = self.token_embedding(input_ids)
-
-        for layer in self.layers:
-            x = layer(x)
-
         x = self.norm(x)
         logits = self.lm_head(x)
 

@@ -69,6 +69,19 @@ def _save_tokenizer(output_dir: str, tokenizer_name: str):
 
         print(f"Downloading tokenizer: {tokenizer_name}")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+
+        # Ensure the exported tokenizer carries the same chat template used
+        # during SFT: if it has none, install the same default ChatML template
+        # (single source of truth: the tokenizer object; save_pretrained writes
+        # it out as chat_template.jinja / tokenizer_config.json).
+        if getattr(tokenizer, "chat_template", None) is None:
+            try:
+                from data.sft_data import DEFAULT_CHAT_TEMPLATE
+                tokenizer.chat_template = DEFAULT_CHAT_TEMPLATE
+                print("Applied default ChatML chat template (same default used for SFT)")
+            except Exception as template_err:
+                print(f"Warning: could not apply default chat template: {template_err}")
+
         tokenizer.save_pretrained(output_dir)
         print(f"Saved tokenizer to {output_dir}")
     except Exception as e:
@@ -143,6 +156,14 @@ def prepare_export_directory(
     if model_config is None:
         raise ValueError("model_config not provided and not found in checkpoint")
 
+    if getattr(model_config, 'assembly', None) is not None:
+        if target_format is not None and target_format != ExportFormat.CUSTOM:
+            raise ValueError('A visual assembly requires its custom runtime for faithful export')
+        from .assembly_export import export_assembly
+        return export_assembly(checkpoint_path, output_dir, model_config,
+                               model_name, model_description, license_type, include_tokenizer, use_safetensors,
+                               author=author, tags=tags, datasets=datasets_used, metrics=metrics, training_config=training_config)
+
     # Detect export format
     if target_format is None:
         format_info = detect_export_format(model_config)
@@ -174,6 +195,11 @@ def prepare_export_directory(
         format_info=format_info,
         training_config=training_config,
     )
+    # Record the actual dtype of the exported weights so from_pretrained
+    # doesn't silently cast (e.g. fp32 weights loaded as bf16)
+    if converted_weights:
+        first_tensor = next(iter(converted_weights.values()))
+        hf_config["torch_dtype"] = str(first_tensor.dtype).replace("torch.", "")
     config_path = os.path.join(output_dir, "config.json")
     save_hf_config(hf_config, config_path)
 
